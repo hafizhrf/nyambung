@@ -1,0 +1,41 @@
+{
+  "name": "nyambung",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n api,web \"npm run dev -w @nyambung/api\" \"npm run dev -w @nyambung/web\"",
+    "build": "npm run typecheck && npm run build -w @nyambung/web && npm run build -w @nyambung/api",
+    "typecheck": "tsc --noEmit",
+    "start": "node apps/api/dist/server.js",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "content": "node --import tsx scripts/content.ts",
+    "demo": "node --import tsx scripts/content.ts demo",
+    "backup": "node --import tsx scripts/backup.ts",
+    "audit:random": "node --import tsx scripts/audit-random.ts",
+    "import:lexicon": "node --import tsx scripts/import-lexicon.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "concurrently": "^9.2.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.28.2": true
+  }
+}

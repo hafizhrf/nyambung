@@ -1,0 +1,1 @@
+{"name":"@nyambung/web","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build"},"dependencies":{"@nyambung/shared":"*","@radix-ui/react-icons":"^1.3.2","@tailwindcss/vite":"^4.1.0","@vitejs/plugin-react":"^5.0.0","gsap":"^3.13.0","react":"^19.1.0","react-dom":"^19.1.0","tailwindcss":"^4.1.0","vite":"^7.1.0"}}

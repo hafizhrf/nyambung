@@ -1,0 +1,14 @@
+import { serve } from '@hono/node-server';
+import { serveStatic } from '@hono/node-server/serve-static';
+import { resolve } from 'node:path';
+import { openDatabase } from '../apps/api/src/db.js';
+import { createApp } from '../apps/api/src/app.js';
+import { compilePackets, publish, compileRandomPool, publishRandomPool } from './content.js';
+import { wibDate } from '../apps/api/src/time.js';
+const store = openDatabase(':memory:');
+publish(store, compilePackets(store, wibDate(), true));
+publishRandomPool(store, compileRandomPool(store, true), true);
+const app = createApp(store);
+app.use('*', serveStatic({ root: resolve('apps/web/dist') }));
+app.use('*', serveStatic({ path: resolve('apps/web/dist/index.html') }));
+serve({ fetch: app.fetch, port: 4173, hostname: '127.0.0.1' });

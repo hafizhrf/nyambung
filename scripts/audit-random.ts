@@ -4,7 +4,8 @@ import {mkdirSync,writeFileSync} from 'node:fs';
 import {openDatabase} from '../apps/api/src/db.js';
 import {selectRounds,combinationKey,type RandomGenerator,type GeneratedSelection} from '../apps/api/src/random-generator.js';
 import {trainDifficulty,type Observation} from '../apps/api/src/adaptive.js';
-import {roundFeatures,type RetrievalContext} from '../apps/api/src/retrieval.js';
+import {roundFeatures,retrieveCandidates,type RetrievalContext} from '../apps/api/src/retrieval.js';
+import {bridgeSeparation} from '../apps/api/src/bridge-quality.js';
 try {process.loadEnvFile('.env');} catch { /* optional */ }
 const store=openDatabase();
 try {
@@ -31,8 +32,10 @@ try {
  const concepts=new Map(data.relations!.map(row=>[row.answer,row.sense??`word:${row.answer}`]));
  const answers=games.flatMap(game=>game.rounds.map(round=>round.best));
  const familyCollisions=games.flatMap(game=>game.rounds).filter(round=>hasWordFamilyCollision([...round.clues,round.best])).length;
- const report={familyCollisions,generator:data.version,hubs:data.relations!.length,profiles:new Set(data.relations!.flatMap(row=>row.facets.flat())).size,modelSamples:model.samples,games:10,bridgeRounds:answers.length,distinctAnswers:new Set(answers).size,distinctConcepts:new Set(answers.map(answer=>concepts.get(answer))).size,distinctClueSets:excluded.size,elapsedMs:Date.now()-started,details:games};
+ const separations=games.flatMap(game=>game.rounds).map(round=>bridgeSeparation(data,round.clues,round.best));
+ const candidates=[...retrieveCandidates(data,'bridge2',model,new Set()),...retrieveCandidates(data,'bridge3',model,new Set())];
+ const report={tooClose:separations.filter(value=>!value.accepted).length,eligibleCombinations:candidates.length,eligibleAnswers:new Set(candidates.map(candidate=>candidate.answer)).size,familyCollisions,generator:data.version,hubs:data.relations!.length,profiles:new Set(data.relations!.flatMap(row=>row.facets.flat())).size,modelSamples:model.samples,games:10,bridgeRounds:answers.length,distinctAnswers:new Set(answers).size,distinctConcepts:new Set(answers.map(answer=>concepts.get(answer))).size,distinctClueSets:excluded.size,elapsedMs:Date.now()-started,details:games};
  mkdirSync('data',{recursive:true});writeFileSync('data/random-audit.json',JSON.stringify(report,null,2));
- if(report.familyCollisions!==0||report.distinctAnswers!==40||report.distinctConcepts!==40||report.distinctClueSets!==40) throw Error('Audit gagal: terdapat pengulangan dalam 10 permainan.');
+ if(report.tooClose!==0||report.familyCollisions!==0||report.distinctAnswers!==40||report.distinctConcepts!==40||report.distinctClueSets!==40) throw Error('Audit gagal: terdapat clue terlalu dekat atau pengulangan dalam 10 permainan.');
  console.log(JSON.stringify({...report,details:undefined,report:'data/random-audit.json'},null,2));
 } finally {store.sqlite.close();}

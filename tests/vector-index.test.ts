@@ -6,8 +6,9 @@ import {openDatabase} from '../apps/api/src/db.js';
 import {game} from '../apps/api/src/game.js';
 import {compileRandomPool,publishRandomPool} from '../scripts/content.js';
 function fixture():RandomGenerator {
- const words=[...new Set([...reviewedBridges.flatMap(r=>[r.answer,...r.facets.flat()]),'gelap','malam','terang'])];
- const vectors=new Map(words.map((word,i)=>[word,[.1+(i%5)/10,.2+(i%7)/10,.3+(i%3)/10,.4+(i%11)/10]]));
+ const words=[...new Set([...reviewedBridges.flatMap(r=>[r.answer,...r.facets.flat()]),'gelap','kelam','terang'])];
+ // Distinct directions let this storage fixture pass the cross-context gate.
+ const vectors=new Map(words.map((word,i)=>[word,Array.from({length:words.length},(_,j)=>i===j?1:0)]));
  return {version:4,packed:packVectors(words,vectors),words,answers:reviewedBridges.map(r=>r.answer),profiles:[],relations:reviewedBridges,excludedCombos:[]};
 }
 it('stores vectors compactly, preserves cosine within quantization error and rejects incomplete indices',()=>{
@@ -33,16 +34,16 @@ it('lazily scores the final stage and preserves progress across editions, restar
  const store=openDatabase(':memory:');
  try {
   const snapshot=compileRandomPool(store,true);snapshot.generator=fixture();
-  const closest={kind:'closest' as const,clues:['gelap'],best:'malam',explanation:'',overrides:{},excluded:['terang'],scores:{}};
+  const closest={kind:'closest' as const,clues:['gelap'],best:'kelam',explanation:'',overrides:{},excluded:['terang'],scores:{}};
   snapshot.stages=[closest];publishRandomPool(store,snapshot,true);
   let service=game(store);const player=service.createPlayer();let run=service.startRandom(player);
   for(let stage=0;stage<4;stage++) run=service.submit(run.id,player,{stage,skip:true});
   expect(run.current!.clues).toEqual(['gelap']);
-  run=service.submit(run.id,player,{stage:4,word:'malam'});
+  run=service.submit(run.id,player,{stage:4,word:'kelam'});
   expect(run.results[4].score).toBe(1000);
   service=game(store);expect(service.view(run.id,player)).toEqual(run);
   expect(service.submit(run.id,player,{stage:4,skip:true})).toEqual(run);
   const scored=evaluateClosest(snapshot.generator!,closest);
-  expect(scored.scores.terang.score).toBe(0);expect(scored.scores.malam.rank).toBe(1);
+  expect(scored.scores.terang.score).toBe(0);expect(scored.scores.kelam.rank).toBe(1);
  } finally {store.sqlite.close();}
 });

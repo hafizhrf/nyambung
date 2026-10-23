@@ -62,6 +62,26 @@ export function openDatabase(path = process.env.DATABASE_PATH || resolve(import.
     if (!columns.some(column => column.name === 'stage_order')) sqlite.exec('ALTER TABLE runs ADD COLUMN stage_order TEXT');
     sqlite.exec('INSERT INTO migrations(version) VALUES (4)');
   }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 5').get()) return;
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS discord_identities (
+      discord_id TEXT PRIMARY KEY, player_id TEXT NOT NULL UNIQUE REFERENCES players(id),
+      name TEXT NOT NULL, avatar TEXT, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS discord_sessions (
+        token_hash TEXT PRIMARY KEY, discord_id TEXT NOT NULL REFERENCES discord_identities(discord_id),
+        instance_id TEXT NOT NULL, expires_at INTEGER NOT NULL);
+      CREATE INDEX IF NOT EXISTS discord_session_expiry ON discord_sessions(expires_at);
+      CREATE TABLE IF NOT EXISTS discord_reminders (
+        guild_id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+        updated_by TEXT NOT NULL, updated_at INTEGER NOT NULL, last_error TEXT);
+      CREATE TABLE IF NOT EXISTS discord_deliveries (
+        guild_id TEXT NOT NULL REFERENCES discord_reminders(guild_id), date TEXT NOT NULL,
+        channel_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+        next_at INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
+        message_id TEXT, last_error TEXT, PRIMARY KEY(guild_id,date));
+      CREATE TABLE IF NOT EXISTS discord_interactions (id TEXT PRIMARY KEY, reply TEXT NOT NULL, expires_at INTEGER NOT NULL);
+      INSERT INTO migrations(version) VALUES (5);`);
+  }).immediate();
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 export type Store = ReturnType<typeof openDatabase>;

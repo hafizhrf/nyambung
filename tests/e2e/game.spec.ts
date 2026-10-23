@@ -31,7 +31,7 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await expect(input).toHaveValue('nongkrong');
   await input.fill('restoran'); await input.press('Enter');
   await expect(page.getByText('Restoran menyajikan makanan', { exact: false })).toBeVisible();
-  await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'gold');
+  await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'red');
   await expect(page.locator('.reward-label')).toHaveText('Sambungan sempurna');
   await expect(page.locator('.connection-branches rect')).toHaveCount(0);
   await expect(page.locator('.flow-progress')).toHaveCount(2);
@@ -94,13 +94,13 @@ for (const sample of [
     await page.getByRole('button', { name: 'Main', exact: true }).click();
     const input = page.getByRole('textbox', { name: 'SATU KATA VERSIMU' });
     await input.fill('restoran'); await input.press('Enter');
-    await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', sample.reward ? 'gold' : 'none');
+    await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', sample.reward ? 'blue' : 'none');
     await expect(page.locator('.reward-label:not([aria-hidden="true"])')).toHaveCount(sample.reward ? 1 : 0);
     if (sample.reward) {
       await expect(page.locator('.score-block strong')).toContainText(String(sample.score));
       await expect.poll(() => page.locator('.reward-rays').evaluate(el => Number(getComputedStyle(el).opacity))).toBe(0);
       await page.getByRole('button', { name: /Motion on/ }).click();
-      await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'gold');
+      await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'blue');
       await expect(page.locator('.reward-label')).toBeVisible();
       await expect(page.locator('.reward-rays')).toHaveCSS('opacity', '0');
       if (sample.rank === 10) {
@@ -201,7 +201,8 @@ async function expectConnectedLines(page:Page) {
       return Math.max(Math.abs(start.x-clue.left-clue.width/2),Math.abs(start.y-clue.bottom),Math.abs(end.x-answer.left-answer.width/2),Math.abs(end.y-answer.top));
     }));
   })).toBeLessThanOrEqual(2);
-  await expect(page.locator('.flow-progress[stroke-dasharray],.flow-base[stroke-dasharray]')).toHaveCount(0);
+  await expect(page.locator('.flow-base[stroke-dasharray]')).toHaveCount(0);
+  await expect(page.locator('mask')).toHaveCount(0);
   await expect(page.locator('.connection-branches linearGradient')).toHaveAttribute('gradientUnits','userSpaceOnUse');
 }
 
@@ -232,6 +233,10 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
     for (const size of sizes) {
       await page.setViewportSize(size);
       await expectFitsScreen(page, ['.clue', '.answer-node', '.score-block', '.best-answer', '.next-button']);
+      await expect.poll(()=>page.locator('.game-paper').evaluate(paper=>{
+        const next=paper.querySelector('.next-button')!;
+        return paper.getBoundingClientRect().bottom-next.getBoundingClientRect().bottom;
+      })).toBeGreaterThanOrEqual(10);
       await expectConnectedLines(page);
       if (word === 'biru') await page.screenshot({path:`test-results/connected-three-${size.width}x${size.height}.png`});
     }
@@ -258,9 +263,11 @@ test('random mode resumes independently and can be played again', async ({ page 
   await page.getByRole('button', { name:'Lanjutkan bermain' }).click();
   await expect(page.getByText('dilewati', { exact:true })).toBeVisible();
   await expect(page.locator('.best-answer p')).toHaveCount(0);
-  await expect(page.locator('.flow-pulse').first()).toHaveCSS('animation-name','none');
+  // A skipped answer has no filled connection or pulse to animate.
+  await expect(page.locator('.flow-pulse')).toHaveCount(0);
   for (let stage = 1; stage < 5; stage++) {
     await page.locator('.next-button').click();
+    await expect(page.locator('.flow-pulse').first()).toHaveCSS('animation-name','none');
     await page.getByRole('button', { name:/Lewati babak/ }).click(); await page.getByRole('button', { name:/Ya, lewati/ }).click();
   }
   await page.locator('.next-button').click();
@@ -285,7 +292,7 @@ test('daily comparison loads real API fields, handles retry and fits small scree
   let requests = 0;
   await page.route('**/api/runs/*/comparison', route => {
     requests++;
-    return route.fulfill({ status:requests === 1 ? 503 : 200, json:requests === 1 ? { error:'Indisponible' } : { players:3, average:3333, best:5000, rank:2, abovePercent:50 } });
+    return route.fulfill({ status:requests === 1 ? 503 : 200, json:requests === 1 ? { error:'Indisponible' } : { players:3, average:3333, best:5000, rank:2, abovePercent:50, histogram:[0,0,0,0,1,0,1,0,0,1], ownScore:3000 } });
   });
   await page.goto('/');
   await page.getByRole('button', { name:'Main', exact:true }).click();
@@ -296,7 +303,7 @@ test('daily comparison loads real API fields, handles retry and fits small scree
   await page.reload(); await page.getByRole('button', { name:'Lihat hasilmu' }).click();
   const comparison = page.getByRole('region', { name:'Perbandingan daily' });
   await comparison.getByRole('button', { name:'Coba lagi' }).click();
-  await expect(comparison).toContainText('3.333'); await expect(comparison).toContainText('#2'); await expect(comparison).toContainText('50%');
+  await expect(comparison.getByRole('img')).toBeVisible(); await expect(comparison.locator('.histogram-bin.is-you')).toHaveCount(1); await expect(comparison).toContainText('3.333'); await expect(comparison).toContainText('#2'); await expect(comparison).toContainText('50%');
   const sizes = testInfo.project.name === 'desktop' ? [{width:1280,height:720},{width:844,height:390}] : [{width:375,height:667},{width:320,height:568},{width:390,height:430}];
   for (const size of sizes) {
     await page.setViewportSize(size);
@@ -320,19 +327,53 @@ for(const score of [600,990]) {
     }
     const input=page.getByRole('textbox',{name:'SATU KATA VERSIMU'});
     await input.fill('biru');await input.press('Enter');
-    await expect(page.locator('.flow-mask')).toHaveCount(3);
+    await expect(page.locator('.flow-progress')).toHaveCount(3);
     for(const [i,value] of [.2,.95,.4].entries()) {
       const branch=page.locator(`[data-connection="${i}"]`);
-      await expect(branch.locator('.flow-mask')).toHaveAttribute('stroke-dasharray',`${value} 1`);
+      await expect(branch.locator('.flow-progress')).toHaveAttribute('stroke-dasharray',`${value} 1`);
       await expect(branch.locator('.flow-progress')).toHaveCount(1);
-      await expect(branch.locator('g[mask]')).toHaveCount(1);
+      await expect(branch.locator('g[mask]')).toHaveCount(0);
       await expect(branch.locator('.flow-base')).toHaveAttribute('stroke','#d8e5f9');
       await expect(page.locator('.clue-strength').nth(i)).toHaveText(`${Math.round(value*100)}% terhubung`);
     }
-    await expect(page.locator('.connection-board')).toHaveAttribute('data-reward',score===990?'gold':'none');
+    await expect(page.locator('.connection-board')).toHaveAttribute('data-reward',score===990?'blue':'none');
     await expectConnectedLines(page);
     await page.screenshot({path:`test-results/${testInfo.project.name}-connection-strength-${score}.png`});
     await page.emulateMedia({reducedMotion:'reduce'});
-    await expect(page.locator('.flow-mask').nth(1)).toHaveAttribute('stroke-dasharray','0.95 1');
+    await expect(page.locator('.flow-progress').nth(1)).toHaveAttribute('stroke-dasharray','0.95 1');
   });
 }
+
+test('perfect answer shakes the cards briefly and respects reduced motion', async ({page},testInfo)=>{
+ await page.goto('/');
+ await page.getByRole('button',{name:'Main',exact:true}).click();
+ await page.evaluate(()=>{
+  const state={moved:false};(window as any).cardMotion=state;
+  const observer=new MutationObserver(()=>{
+   document.querySelectorAll('.clue').forEach(el=>{
+    const transform=getComputedStyle(el).transform;
+    if(transform!=='none'&&Math.abs(new DOMMatrixReadOnly(transform).m41)>.5) state.moved=true;
+   });
+  });
+  observer.observe(document.querySelector('.connection-board')!,{attributes:true,subtree:true,attributeFilter:['style']});
+ });
+ const input=page.getByRole('textbox',{name:'SATU KATA VERSIMU'});
+ await input.fill('restoran');await input.press('Enter');
+ await expect(page.locator('.score-block strong')).toContainText('1.000');
+ if(testInfo.project.name==='desktop') await expect.poll(()=>page.evaluate(()=>(window as any).cardMotion.moved)).toBe(true);
+ else expect(await page.evaluate(()=>(window as any).cardMotion.moved)).toBe(false);
+ await expect.poll(()=>page.locator('.clue').first().evaluate(el=>Math.abs(new DOMMatrixReadOnly(getComputedStyle(el).transform).m41))).toBe(0);
+ await expect(page.locator('.connection-board')).toHaveAttribute('data-reward','red');
+ await expect(page.locator('.answer-node strong')).toHaveCSS('color','rgb(207, 52, 59)');
+ await expect(page.locator('.clue').first()).toHaveCSS('background-color','rgb(255, 245, 245)');
+ await expect(page.locator('.score-block strong')).toHaveCSS('color','rgb(207, 52, 59)');
+ await expect(page.locator('.next-button')).toHaveCSS('background-color','rgb(207, 52, 59)');
+ await page.screenshot({path:`test-results/${testInfo.project.name}-perfect-red.png`});
+ if(testInfo.project.name==='desktop') {
+  const next=page.locator('.next-button');
+  await next.hover();await page.mouse.down();
+  await expect.poll(()=>next.evaluate(el=>new DOMMatrixReadOnly(getComputedStyle(el).transform).a)).toBeLessThan(.99);
+  await page.mouse.up();
+ }
+
+});

@@ -1,3 +1,4 @@
+import { bridgeSeparation } from './bridge-quality.js';
 import { profileFor,type PackedVectors } from './vector-index.js';
 import { selectRetrievedRounds, type RetrievalContext } from './retrieval.js';
 import type { StageKind } from '@nyambung/shared';
@@ -5,7 +6,7 @@ import type { PublishedStage, ScoreEntry } from './scoring.js';
 export interface ClueProfile { word:string; similarities:number[]; baseline:number; reference:number }
 export interface ReviewedBridge { answer:string; facets:string[][]; source?:string; sense?:string }
 export interface RandomGenerator {
-  version:1|2|3|4; packed?:PackedVectors; relations?:ReviewedBridge[]; words:string[]; answers:string[]; profiles:ClueProfile[]; excludedCombos:string[];
+  version:1|2|3|4; bridgePolicy?:'cross-context-v1'; packed?:PackedVectors; relations?:ReviewedBridge[]; words:string[]; answers:string[]; profiles:ClueProfile[]; excludedCombos:string[];
 }
 export interface GeneratedRound { kind:StageKind; clues:string[]; target?:string; features?:number[] }
 export interface GeneratedSelection { generator:1; rounds:GeneratedRound[]; closestIndex?:number; policy?:{version:'retrieval-ridge-v1';samples:number;weights:number[];explorations:number} }
@@ -152,7 +153,7 @@ function selectReviewedRounds(data:RandomGenerator,pick:(limit:number)=>number,e
         }
       }
     }
-    const pool=candidates.filter(round=>new Set(round.clues).size===round.clues.length && !blocked.has(combinationKey(round.clues)) && round.clues.every(word=>!used.has(word)));
+    const pool=candidates.filter(round=>new Set(round.clues).size===round.clues.length && !blocked.has(combinationKey(round.clues)) && round.clues.every(word=>!used.has(word)) && reviewedAnswers(data,round.clues).some(answer=>bridgeSeparation(data,round.clues,answer).accepted));
     if (!pool.length) throw new Error('Bank kurasi acak belum cukup untuk permainan baru.');
     const round=pool[pick(pool.length)];
     // Shuffle clue positions too, while keeping a deterministic stored descriptor.

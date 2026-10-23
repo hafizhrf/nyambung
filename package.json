@@ -17,7 +17,8 @@
     "demo": "node --import tsx scripts/content.ts demo",
     "backup": "node --import tsx scripts/backup.ts",
     "audit:random": "node --import tsx scripts/audit-random.ts",
-    "import:lexicon": "node --import tsx scripts/import-lexicon.ts"
+    "import:lexicon": "node --import tsx scripts/import-lexicon.ts",
+    "discord:register": "node --import tsx scripts/discord-register.ts"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

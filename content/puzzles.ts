@@ -1,3 +1,4 @@
+import { dailyBridges } from './daily-bridges.js';
 import lexicon from './lexicon.json';
 import type { ContentStage } from '../apps/api/src/scoring.js';
 // Original Indonesian editorial candidates. Publication requires reviewing CLI preview.
@@ -103,16 +104,17 @@ const days = [
   ],
 ];
 const antonyms = [['sedih', 'kecewa'], ['lambat', 'cepa', 'cepak', 'cepit', 'cepol'], ['buruk'], ['ramai', 'ribut'], ['bodoh'], ['segar'], ['takut'], ['sulit'], ['musuh'], ['senang', 'bahagia'], ['bohong'], ['ribut'], ['kecil', 'bigair'], ['benci']];
-export const puzzles: ContentStage[][] = days.map((rows, day) => rows.map((row, index) => {
+export const introductoryPuzzles: ContentStage[][] = days.map((rows, day) => rows.map((row, index) => {
   const [clues, best, explanation, alt] = row.split('|');
   const overrides = Object.fromEntries((alt || '').split(';').filter(Boolean).map(pair => { const [word, scores] = pair.split('='); return [word, scores.split(',').map(Number)]; }));
   // Multiword alternatives are editorial notes, not playable entries.
   for (const word of Object.keys(overrides)) if (!/^[a-z]+$/.test(word)) delete overrides[word];
   return { kind: index < 3 ? 'bridge2' : index === 3 ? 'bridge3' : 'closest', clues: clues.split(','), best, explanation, overrides, ...(index === 4 ? { excluded: antonyms[day] } : {}) };
 }));
+export const puzzles: ContentStage[][] = dailyBridges.map((stages, day) => [...stages, introductoryPuzzles[day][4]]);
 export const aliases: Record<string, string> = { mal: 'mall', resto: 'restoran', cafe: 'kafe', yogurt: 'yoghurt', telor: 'telur', tentram: 'tenteram', omlet: 'omelet' };
 export const blocked = ['kontol', 'memek'];
 const extra = 'bodoh musuh benci nongkrong rumah kucing anjing meja kursi makan minuman nongol teman kerja belajar nasi goreng angkasa bintang matahari tanah bumi main bermain sendok garpu piring sendal sepatu tas jam tangan batu mobil motor uang kopi teh susu sapu bersih senyum sedih bahagia kecewa lambat kecil buruk ramai ribut bohong takut malas sulit gelap terang sehat penyakit'.split(' ');
-export const demoVocabulary = [...new Set([...extra, ...Object.values(aliases), ...puzzles.flatMap(day => day.flatMap(stage => [...stage.clues, stage.best, ...Object.keys(stage.overrides)]))])].filter(word => /^[a-z]+$/.test(word) && !blocked.includes(word)).sort();
+export const demoVocabulary = [...new Set([...extra, ...Object.values(aliases), ...[...puzzles, ...introductoryPuzzles].flatMap(day => day.flatMap(stage => [...stage.clues, stage.best, ...Object.keys(stage.overrides)]))])].filter(word => /^[a-z]+$/.test(word) && !blocked.includes(word)).sort();
 
 export const vocabulary = [...new Set([...demoVocabulary, ...lexicon])].filter(word => !blocked.includes(word)).sort();

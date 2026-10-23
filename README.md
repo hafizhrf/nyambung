@@ -144,3 +144,32 @@ Jalankan `npm run audit:random` setelah publikasi untuk mengukur sepuluh permain
 
 
 Filter `word-family.ts` dipakai saat publikasi dan saat retrieval, termasuk untuk snapshot bank yang sudah tersedia. Semua pasangan clue–clue dan clue–target diperiksa untuk keluarga kata berimbuhan, peluluhan konsonan (meninju → tinju, menyapu → sapu), serta ekstensi serapan seperti intelek–intelektual. Pemeriksaan ini hanya menyaring pembentukan soal; input, validitas kamus, dan skor jawaban pemain tetap menggunakan kata utuh. Audit juga gagal bila ada benturan keluarga kata dalam babak baru. Sesi yang telah dimulai tetap memakai deskriptor dan skor semula.
+
+### Discord Activity (beta)
+
+Activity, akun Discord, progres peserta, Rich Presence, serta bot pengingat daily
+tersedia sebagai integrasi opsional. Default tetap nonaktif. Ikuti
+[setup Discord](docs/discord.md) untuk konfigurasi Developer Portal, environment,
+URL mapping, instalasi bot dan pengujian dua akun. `npm run discord:register`
+menampilkan preview; tambahkan `-- --apply` untuk mendaftarkan command ke server beta.
+
+### Kualitas jembatan kata
+
+Pemilihan jembatan menolak kata serumpun, sinonim, dan hubungan langsung Wordnet
+antar-clue. Kedekatan embedding antar-clue juga dibatasi, lalu kandidat diberi
+prioritas berdasarkan jarak konteks, variasi, dan hasil permainan. Hubungan ke
+jawaban tetap harus mempunyai bukti kurasi; clue tidak diacak tanpa hubungan.
+Filter ini dipakai saat memilih soal baru, sehingga skor sesi lama tetap identik.
+
+`npm run audit:random` memeriksa 10 permainan untuk pengulangan dan clue terlalu
+dekat, serta menghitung kombinasi yang benar-benar lolos. Bank aktif bisa diberi
+kebijakan baru tanpa meminta embedding lagi menggunakan
+`npm run content -- preview-random --reuse-published`, lalu
+`publish-random --reuse-published --approve HASH`. Sesi bermasalah yang sama sekali
+belum dijawab dipensiunkan saat publikasi; sesi yang sudah dijawab dipertahankan.
+
+Daily semantik memakai kurasi lintas konteks; soal pengantar hanya dipakai untuk
+demo. Setelah `preview`, `refresh-upcoming --approve HASH` dapat merevisi tanggal
+**setelah hari ini** yang belum mempunyai sesi. Operasi ditolak secara atomik bila
+salah satu tanggal tersebut sudah pernah dimulai. Daily hari ini tidak berubah.
+Ambil `npm run backup` sebelum revisi database yang sudah digunakan.

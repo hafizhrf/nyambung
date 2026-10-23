@@ -7,12 +7,13 @@ import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { openDatabase, type Store } from '../apps/api/src/db.js';
 import { daily, embeddings, puzzleVersions, randomPool } from '../apps/api/src/schema.js';
-import { compileStage, compileRandomSynonym, centerVectors, fingerprint, FORMULA, type Snapshot } from '../apps/api/src/scoring.js';
+import { compileStage, compileRandomSynonym, centerVectors, cosine, fingerprint, FORMULA, type Snapshot } from '../apps/api/src/scoring.js';
+import { inspectBridge, bridgeSeparation } from '../apps/api/src/bridge-quality.js';
 import { addDays, wibDate } from '../apps/api/src/time.js';
 import { reviewedBridges } from '../content/relations.js';
 import { selectRounds, combinationKey, type RandomGenerator } from '../apps/api/src/random-generator.js';
 import { randomStages } from '../content/random.js';
-import { puzzles, vocabulary, demoVocabulary, aliases, blocked } from '../content/puzzles.js';
+import { puzzles, introductoryPuzzles, vocabulary, demoVocabulary, aliases, blocked } from '../content/puzzles.js';
 try { process.loadEnvFile(resolve('.env')); } catch { /* .env is optional */ }
 export function compilePackets(store: Store, start: string, demo = false) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !Number.isFinite(Date.parse(start)) || new Date(`${start}T00:00:00Z`).toISOString().slice(0, 10) !== start) throw new Error('Tanggal harus YYYY-MM-DD yang valid.');
@@ -21,8 +22,11 @@ export function compilePackets(store: Store, start: string, demo = false) {
   let vectors = new Map(store.orm.select().from(embeddings).where(eq(embeddings.model, model)).all().map(row => [row.word, JSON.parse(row.vector) as number[]]));
   if (!demo && words.some(word => !vectors.has(word))) throw new Error('Embedding belum lengkap. Jalankan npm run content -- embed.');
   if (!demo) vectors = centerVectors(vectors, words);
+  if (!demo) for (const stage of puzzles.flat().filter(stage => stage.kind !== 'closest')) {
+    if (!inspectBridge(stage.clues, stage.best, (a, b) => cosine(vectors.get(a)!, vectors.get(b)!)).accepted) throw new Error(`Clue terlalu berdekatan atau serumpun: ${stage.clues.join(' / ')}.`);
+  }
   if (puzzles.length !== 14 || puzzles.some(stages => stages.length !== 5 || stages.some((stage, i) => stage.kind !== (i < 3 ? 'bridge2' : i === 3 ? 'bridge3' : 'closest')))) throw new Error('Konten harus terdiri dari 14 hari dengan urutan lima stage yang sesuai.');
-  return puzzles.map((stages, i) => {
+  return (demo ? introductoryPuzzles : puzzles).map((stages, i) => {
     const snapshot: Snapshot = { version: 1, model, formula: demo ? 'curated-demo-v1' : FORMULA, vocabularyHash: fingerprint(words), aliases, blocked, stages: stages.map(stage => compileStage(stage, words, demo ? undefined : vectors)) };
     const date = addDays(start, i);
     return { date, number: Math.floor((Date.parse(`${date}T00:00:00Z`) - Date.parse('2026-10-22T00:00:00Z')) / 86400000) + 1, demo, snapshot: JSON.stringify(snapshot), publishedAt: new Date().toISOString() };
@@ -43,6 +47,19 @@ export function publish(store: Store, packets: ReturnType<typeof compilePackets>
     }
   }, { behavior: 'immediate' });
 }
+// Explicit editorial revision for dates that nobody has started. The current
+// day's shared puzzle and every run's pinned snapshot are never changed.
+export function refreshUpcoming(store: Store, packets: ReturnType<typeof compilePackets>, today = wibDate()) {
+  const upcoming = packets.filter(packet => packet.date > today);
+  store.sqlite.transaction(() => {
+    for (const packet of upcoming) {
+      if (store.sqlite.prepare("SELECT 1 FROM runs WHERE mode='daily' AND date=? LIMIT 1").get(packet.date)) throw new Error(`${packet.date} sudah memiliki sesi. Revisi dibatalkan.`);
+    }
+    const update = store.sqlite.prepare('INSERT INTO daily(date,number,demo,snapshot,published_at) VALUES (?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET number=excluded.number,demo=excluded.demo,snapshot=excluded.snapshot,published_at=excluded.published_at');
+    for (const packet of upcoming) update.run(packet.date, packet.number, Number(packet.demo), packet.snapshot, packet.publishedAt);
+  }).immediate();
+  return upcoming.length;
+}
 export function compileRandomPool(store: Store, demo = false, generated = !demo): Snapshot {
   if (randomStages.some(stage => puzzles.flat().some(dailyStage => dailyStage.kind === stage.kind && [...dailyStage.clues].sort().join(',') === [...stage.clues].sort().join(',')))) throw new Error('Bank acak tidak boleh memakai petunjuk daily terjadwal.');
   const words = demo ? [...new Set([...demoVocabulary, ...randomStages.flatMap(stage => [...stage.clues, stage.best, ...Object.keys(stage.overrides), ...stage.excluded || []])])] : vocabulary;
@@ -53,7 +70,7 @@ export function compileRandomPool(store: Store, demo = false, generated = !demo)
   let generator:RandomGenerator | undefined;
   let stages:(typeof randomStages[number] & {concept?:string})[]=randomStages;
   if (generated && !demo) {
-    generator={version:4,packed:packVectors(words,vectors),words,answers:[],relations:reviewedBridges,profiles:[],excludedCombos:[...puzzles.flat(),...randomStages].map(stage=>combinationKey(stage.clues))};
+    generator={version:4,bridgePolicy:'cross-context-v1',packed:packVectors(words,vectors),words,answers:[],relations:reviewedBridges,profiles:[],excludedCombos:[...puzzles.flat(),...randomStages].map(stage=>combinationKey(stage.clues))};
     const lexical=compileLexicalBank(generator);
     generator.relations=[...reviewedBridges,...lexical.relations];
     generator.answers=generator.relations.map(relation=>relation.answer);
@@ -63,7 +80,7 @@ export function compileRandomPool(store: Store, demo = false, generated = !demo)
     const required=generator.relations.flatMap(relation=>[relation.answer,...relation.facets.flat()]);
     const wordSet=new Set(words);
     if(required.some(word=>!wordSet.has(word)||blocked.includes(word))) throw Error('Bank leksikal mengandung kata yang belum tersedia.');
-    if(generator.relations.length<3||stages.length<1000) throw Error('Bank leksikal belum cukup untuk publikasi.');
+    if(generator.relations.length<3||stages.length<100) throw Error('Bank leksikal belum cukup untuk publikasi.');
   }
   return {version:1,model,formula:generator?'packed-wordnet-ridge-harmonic-v4':demo?'curated-demo-v1':FORMULA,vocabularyHash:fingerprint(words),aliases,blocked,...(generator?{generator}:{}),stages:stages.map(stage=>generator?{...stage,scores:{},vocabularySize:words.length-stage.clues.length}:compileStage(stage,words,demo?undefined:vectors))};
 }
@@ -76,6 +93,44 @@ export function publishRandomPool(store: Store, snapshot: Snapshot, demo = false
     tx.insert(puzzleVersions).values({ id:versionId, snapshot:value, demo }).onConflictDoNothing().run();
     tx.insert(randomPool).values({ id:'active', versionId }).onConflictDoUpdate({ target:randomPool.id, set:{ versionId } }).run();
   }, { behavior:'immediate' });
+}
+export function requalifyPublishedRandomPool(store: Store): Snapshot {
+  const row = store.sqlite.prepare("SELECT v.snapshot FROM random_pool p JOIN puzzle_versions v ON v.id=p.version_id WHERE p.id='active'").get() as {snapshot:string}|undefined;
+  if (!row) throw new Error('Bank acak belum tersedia.');
+  const snapshot = JSON.parse(row.snapshot) as Snapshot;
+  if (!snapshot.generator || snapshot.generator.version < 3) throw new Error('Bank ini belum memakai retrieval. Siapkan bank baru terlebih dahulu.');
+  snapshot.generator.bridgePolicy = 'cross-context-v1';
+  const {synonyms}=compileLexicalBank(snapshot.generator);
+  const human=randomStages.filter(stage=>stage.kind==='closest').map(stage=>({...stage,concept:synonyms.find(other=>other.clues[0]===stage.clues[0])?.concept}));
+  const known=new Set(human.map(stage=>stage.clues[0]));
+  snapshot.stages=[...human,...synonyms.filter(stage=>!known.has(stage.clues[0]))].map(stage=>({...stage,scores:{},vocabularySize:snapshot.generator!.words.length-1}));
+
+  snapshot.generator.excludedCombos = [...new Set([...snapshot.generator.excludedCombos, ...puzzles.flat().map(stage => combinationKey(stage.clues))])];
+  if (!snapshot.formula.includes('/cross-context-v1')) snapshot.formula += '/cross-context-v1';
+  if (!snapshot.formula.includes('/reviewed-meanings-v1')) snapshot.formula += '/reviewed-meanings-v1';
+  return snapshot;
+}
+export function retireUnstartedTrivialRuns(store: Store, timestamp = new Date().toISOString()) {
+  const rows = store.sqlite.prepare("SELECT id,version_id,stage_order FROM runs r WHERE mode='random' AND completed_at IS NULL AND superseded_at IS NULL AND NOT EXISTS(SELECT 1 FROM answers a WHERE a.run_id=r.id)").all() as {id:string;version_id:string;stage_order:string|null}[];
+  const generators = new Map<string, RandomGenerator>();
+  const retire: string[] = [];
+  for (const row of rows) {
+    const order = row.stage_order ? JSON.parse(row.stage_order) : null;
+    if (!order || Array.isArray(order) || !Array.isArray(order.rounds)) continue;
+    let generator = generators.get(row.version_id);
+    if (!generator) {
+      const version = store.sqlite.prepare('SELECT snapshot FROM puzzle_versions WHERE id=?').get(row.version_id) as {snapshot:string};
+      generator = (JSON.parse(version.snapshot) as Snapshot).generator;
+      if (!generator) continue;
+      generators.set(row.version_id, generator);
+    }
+    if (order.rounds.some((round: import('../apps/api/src/random-generator.js').GeneratedRound) => !bridgeSeparation(generator!, round.clues, round.target ?? '').accepted)) retire.push(row.id);
+  }
+  return store.sqlite.transaction(() => {
+    let count = 0;
+    for (const id of retire) count += store.sqlite.prepare('UPDATE runs SET superseded_at=? WHERE id=? AND completed_at IS NULL AND superseded_at IS NULL AND NOT EXISTS(SELECT 1 FROM answers WHERE run_id=?)').run(timestamp, id, id).changes;
+    return count;
+  }).immediate();
 }
 export function jinaCacheKey() {
   return `jina/${process.env.JINA_EMBEDDING_MODEL || 'jina-embeddings-v5-text-small'}/text-matching/512/id-context-v2`;
@@ -133,19 +188,21 @@ async function main() {
   try {
     if (command === 'embed') return await embed(store);
     if (command === 'preview-random' || command === 'publish-random') {
-      const snapshot = compileRandomPool(store);
+      const snapshot = process.argv.includes('--reuse-published') ? requalifyPublishedRandomPool(store) : compileRandomPool(store);
       const hash = fingerprint(snapshot);
       if (command === 'preview-random') {
         mkdirSync('data', { recursive:true });
         writeFileSync('data/random-review.json', JSON.stringify({ approvalHash:hash, ...(snapshot.generator ? { generator:{ answers:snapshot.generator.relations?.length, closest:snapshot.stages.length, packedBytes:snapshot.generator.packed ? Buffer.byteLength(snapshot.generator.packed.data,'base64') : undefined, profiles:new Set(snapshot.generator.relations?.flatMap(row=>row.facets.flat())??snapshot.generator.profiles.map(profile=>profile.word)).size, vocabulary:snapshot.generator.words.length, sample:selectRounds(snapshot.generator, randomInt).stages.map(stage=>({ clues:stage.clues,best:stage.best,top:Object.entries(stage.scores).sort((a,b)=>b[1].score-a[1].score).slice(0,8) })) } } : {}), closestCount:snapshot.stages.length, stages:snapshot.stages.slice(0,25).map(stage => ({ ...stage, scores:Object.entries(stage.scores).sort((a,b) => b[1].score - a[1].score).slice(0,15) })) }, null, 2));
-        console.log(`Review data/random-review.json, lalu npm run content -- publish-random --approve ${hash}`);
+        console.log(`Review data/random-review.json, lalu npm run content -- publish-random${process.argv.includes('--reuse-published') ? ' --reuse-published' : ''} --approve ${hash}`);
       } else {
         if (process.argv[process.argv.indexOf('--approve') + 1] !== hash) throw new Error('Hash review bank acak tidak sesuai.');
-        publishRandomPool(store, snapshot); console.log(snapshot.generator ? `Generator acak aktif: ${new Set(snapshot.generator.relations?.flatMap(row=>row.facets.flat())??snapshot.generator.profiles.map(profile=>profile.word)).size} kata petunjuk, ${snapshot.generator.words.length} kandidat jawaban.` : `${snapshot.stages.length} soal acak semantik diterbitkan.`);
+        publishRandomPool(store, snapshot);
+        if (snapshot.generator?.bridgePolicy) console.log(`${retireUnstartedTrivialRuns(store)} sesi acak bermasalah tanpa tebakan dipensiunkan; sesi yang sudah dijawab tetap.`);
+        console.log(snapshot.generator ? `Generator acak aktif: ${new Set(snapshot.generator.relations?.flatMap(row=>row.facets.flat())??snapshot.generator.profiles.map(profile=>profile.word)).size} kata petunjuk, ${snapshot.generator.words.length} kandidat jawaban.` : `${snapshot.stages.length} soal acak semantik diterbitkan.`);
       }
       return;
     }
-    if (!['demo', 'preview', 'publish', 'upgrade-demo'].includes(command)) throw new Error('Pakai: npm run content -- embed | preview | publish --approve HASH | upgrade-demo --approve HASH | demo');
+    if (!['demo', 'preview', 'publish', 'upgrade-demo', 'refresh-upcoming'].includes(command)) throw new Error('Pakai: npm run content -- embed | preview | publish --approve HASH | refresh-upcoming --approve HASH | upgrade-demo --approve HASH | demo');
     const startIndex = process.argv.indexOf('--start');
     const start = startIndex >= 0 ? process.argv[startIndex + 1] : process.env.CONTENT_START_DATE || wibDate();
     const packets = compilePackets(store, start, command === 'demo');
@@ -164,7 +221,8 @@ async function main() {
       console.log(`Review kandidat di data/review.json. Periksa asosiasi, slang, dan antonim pada semua 70 stage.\nSetelah review: npm run content -- publish --start ${start} --approve ${hash}`);
     } else {
       if (command !== 'demo' && process.argv[process.argv.indexOf('--approve') + 1] !== hash) throw new Error('Publikasi membutuhkan hash preview yang sudah direview. Jalankan preview ulang setelah perubahan konten.');
-      publish(store, packets, command === 'upgrade-demo'); console.log(`${packets.length} paket ${command === 'demo' ? 'DEMO KURASI (bukan skor embedding)' : 'semantik'} tersedia mulai ${start}.`);
+      if (command === 'refresh-upcoming') console.log(`${refreshUpcoming(store, packets)} daily mendatang diperbarui; daily hari ini dan sesi lama tetap.`);
+      else { publish(store, packets, command === 'upgrade-demo'); console.log(`${packets.length} paket ${command === 'demo' ? 'DEMO KURASI (bukan skor embedding)' : 'semantik'} tersedia mulai ${start}.`); }
     }
   } finally { store.sqlite.close(); }
 }

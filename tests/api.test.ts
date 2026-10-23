@@ -204,7 +204,7 @@ describe('random mode and daily comparison', () => {
     };
     const top = finish(false), lower = finish(true), tied = finish(true);
     const unfinished = service.createPlayer(), pending = service.start(unfinished);
-    expect(service.comparison(top.run.id, top.player)).toEqual({ players:3, average:4333, best:5000, rank:1, abovePercent:100 });
+    expect(service.comparison(top.run.id, top.player)).toEqual({ players:3, average:4333, best:5000, rank:1, abovePercent:100, histogram:[0,0,0,0,0,0,0,0,2,1], ownScore:5000 });
     expect(service.comparison(lower.run.id, lower.player)).toMatchObject({ players:3, rank:2, abovePercent:0 });
     expect(service.comparison(tied.run.id, tied.player).rank).toBe(2);
     expect(service.comparison(pending.id, unfinished).rank).toBeNull();
@@ -217,8 +217,8 @@ describe('random mode and daily comparison', () => {
     const packet = compilePackets(store, '2026-10-22', true)[0];
     publish(store, [{ ...packet, demo:false, snapshot:JSON.stringify({ ...JSON.parse(packet.snapshot), model:'test-semantic' }) }], true);
     const run = (await request('/runs', {})).json;
-    expect((await request(`/runs/${run.id}/comparison`)).json).toEqual({ players:0, average:0, best:0, rank:null, abovePercent:null });
+    expect((await request(`/runs/${run.id}/comparison`)).json).toEqual({ players:0, average:0, best:0, rank:null, abovePercent:null, histogram:Array(10).fill(0), ownScore:null });
     for (let stage = 0; stage < 5; stage++) await request(`/runs/${run.id}/answers`, { stage, skip:true });
-    expect((await request(`/runs/${run.id}/comparison`)).json).toEqual({ players:1, average:0, best:0, rank:1, abovePercent:null });
+    expect((await request(`/runs/${run.id}/comparison`)).json).toEqual({ players:1, average:0, best:0, rank:1, abovePercent:null, histogram:[1,0,0,0,0,0,0,0,0,0], ownScore:0 });
   });
 });

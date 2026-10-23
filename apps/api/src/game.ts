@@ -1,3 +1,4 @@
+import {isReviewedClosest} from '../../../content/closest.js';
 import {sameWordFamily} from './word-family.js';
 import {evaluateClosest} from './vector-index.js';
 import { trainDifficulty, type Observation } from './adaptive.js';
@@ -133,7 +134,7 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     return { available: !!pool, run: active ? view(active.id, playerId) : null };
   }
   function pickClosest(snapshot:Snapshot, playerId:string):number {
-    const candidates=snapshot.stages.map((stage,index)=>({stage,index})).filter(item=>item.stage.kind==='closest'&&!sameWordFamily(item.stage.clues[0],item.stage.best));
+    const candidates=snapshot.stages.map((stage,index)=>({stage,index})).filter(item=>item.stage.kind==='closest'&&isReviewedClosest(item.stage.clues[0],item.stage.best)&&!sameWordFamily(item.stage.clues[0],item.stage.best));
     if (!candidates.length) throw new Error('Babak kedekatan makna belum tersedia.');
     // Read actual clues rather than stage indices: indices change between editions.
     // Keeping the N-1 most recent distinct clues gives a full rotation of N clues.
@@ -204,7 +205,7 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     const run = requireRun(id, playerId);
     if (run.mode !== 'daily') throw new GameError('Perbandingan hanya tersedia untuk daily.');
     const version = db.select({ demo:puzzleVersions.demo }).from(puzzleVersions).where(eq(puzzleVersions.id, run.versionId!)).get()!;
-    if (version.demo) return { players:0, average:0, best:0, rank:null, abovePercent:null };
+    if (version.demo) return { players:0, average:0, best:0, rank:null, abovePercent:null, histogram:Array(10).fill(0), ownScore:null };
     // One completed, active run per anonymous identity, on this exact frozen edition.
     const cohort = store.sqlite.prepare(`SELECT r.id, SUM(CAST(json_extract(a.result, '$.score') AS INTEGER)) AS total
       FROM runs r JOIN answers a ON a.run_id = r.id
@@ -212,6 +213,8 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
       GROUP BY r.id HAVING COUNT(*) = 5`).all(run.date, run.versionId) as { id:string; total:number }[];
     const own = cohort.find(item => item.id === id);
     return {
+      histogram:Array.from({length:10}, (_,i) => cohort.filter(item => Math.min(9,Math.floor(item.total/500)) === i).length),
+      ownScore:own?.total ?? null,
       players:cohort.length,
       average:cohort.length ? Math.round(cohort.reduce((sum, item) => sum + item.total, 0) / cohort.length) : 0,
       best:Math.max(0, ...cohort.map(item => item.total)),

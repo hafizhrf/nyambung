@@ -22,7 +22,7 @@ export function sameWordFamily(a:string,b:string):boolean {
  if(a===b) return true;
  // Borrowed extensions such as intelek/intelektual also reveal the same word.
  const shorter=a.length<b.length?a:b,longer=a.length<b.length?b:a;
- if(shorter.length>=5 && longer.includes(shorter) && shorter.length/longer.length>=.5) return true;
+ if(shorter.length>=5 && longer.startsWith(shorter) && shorter.length/longer.length>=.5) return true;
  const left=forms(a),right=forms(b);
  return [...left].some(form=>right.has(form));
 }

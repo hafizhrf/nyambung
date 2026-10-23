@@ -1,11 +1,11 @@
-import {hasWordFamilyCollision} from './word-family.js';
+import {bridgeSeparation,areSynonyms} from './bridge-quality.js';
 import {semanticSimilarity} from './vector-index.js';
 import { predictDifficulty, trainDifficulty, type DifficultyModel } from './adaptive.js';
 import { combinationKey, reviewedAnswers, evaluateRound, type RandomGenerator, type GeneratedRound, type GeneratedSelection } from './random-generator.js';
 import type { PublishedStage } from './scoring.js';
 export interface Exposure { best:string; clues:string[] }
 export interface RetrievalContext { exposures:Exposure[]; model:DifficultyModel }
-export interface Candidate { round:GeneratedRound; answer:string; concept?:string; features:number[]; relevance:number; expected:number }
+export interface Candidate { round:GeneratedRound; answer:string; concept?:string; features:number[]; relevance:number; expected:number; separation:number }
 const candidateCache=new WeakMap<RandomGenerator,Map<string,Candidate[]>>();
 const profileCache=new WeakMap<RandomGenerator,Map<string,RandomGenerator['profiles'][number]>>();
 const indexCache=new WeakMap<RandomGenerator,Map<string,number>>();
@@ -36,13 +36,15 @@ export function retrieveCandidates(data:RandomGenerator,kind:'bridge2'|'bridge3'
       for(const x of groups[a]) for(const y of groups[b]) {
         const sets=kind==='bridge2'?[[x,y]]:groups.slice(b+1).flatMap(group=>group.map(z=>[x,y,z]));
         for(const clues of sets) {
-          if(hasWordFamilyCollision([...clues,relation.answer])) continue;
+          if(relation.source==='wordnet-bahasa' && clues.some(clue=>areSynonyms(clue,relation.answer))) continue;
+          const separation=bridgeSeparation(data,clues,relation.answer);
+          if(!separation.accepted) continue;
           const round:GeneratedRound={kind,clues};
           const features=roundFeatures(data,round,relation.answer);if(!features) continue;
           // Hybrid retrieval: explicit reviewed edges establish validity; frozen
           // semantic similarities rank connection balance within that evidence.
           const relevance=.7+.2*Math.max(0,features[2])+.1*Math.max(0,features[3]);
-          const candidate={round,answer:relation.answer,concept:relation.sense??`word:${relation.answer}`,features,relevance,expected:predictDifficulty(model,features)};
+          const candidate={round,answer:relation.answer,concept:relation.sense??`word:${relation.answer}`,features,relevance,separation:separation.novelty,expected:predictDifficulty(model,features)};
           const key=`${relation.answer}/${combinationKey(clues)}`;
           candidates.set(key,candidate);
         }
@@ -76,12 +78,12 @@ export function selectRetrievedRounds(data:RandomGenerator,pick:(limit:number)=>
       const oldest=Math.max(...pool.map(candidate=>answerRecency.get(candidate.answer)!));
       pool=pool.filter(candidate=>answerRecency.get(candidate.answer)!>=oldest-3);
     }
-    const target=[.8,.7,.6,.65][stageIndex];
+    const target=[.65,.6,.55,.55][stageIndex];
     const rank=(candidate:Candidate)=>{
       const shared=Math.max(0,...selected.map(previous=>overlap(previous.round.clues,candidate.round.clues)));
       const recentPattern=Math.max(0,...context.exposures.slice(0,40).map(previous=>overlap(previous.clues,candidate.round.clues)));
       const repeated=candidate.round.clues.reduce((sum,word)=>sum+Math.min(1,(clueFrequency.get(word)??0)/4),0)/candidate.round.clues.length;
-      return .25*candidate.relevance+.45*(1-Math.abs(candidate.expected-target))-.25*recentPattern-.2*repeated-.3*shared;
+      return .2*candidate.relevance+.35*(1-Math.abs(candidate.expected-target))+.3*candidate.separation-.25*recentPattern-.2*repeated-.3*shared;
     };
     // Equal-size retrieval per answer prevents hubs with more facets from being
     // sampled more often. MMR-style novelty penalties diversify the shortlist.

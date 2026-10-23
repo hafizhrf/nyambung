@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, useId, type FormEvent, type ReactNode } from 'react';
 import { ArrowRightIcon, PlayIcon, BarChartIcon, CheckIcon, ChevronLeftIcon, QuestionMarkCircledIcon, ClockIcon, CopyIcon, Link2Icon, ReloadIcon, SpeakerLoudIcon, SpeakerOffIcon, Cross2Icon } from '@radix-ui/react-icons';
 import gsap from 'gsap';
-import { stageNames, type GameMode, type RandomView, type DailyView, type RunView, type StageResult, type Stats } from '@nyambung/shared';
+import { type GameMode, type RandomView, type DailyView, type RunView, type StageResult, type Stats } from '@nyambung/shared';
 import { api } from './api';
-import { browserPlatform } from './platform';
+import { platform } from './platform';
+import { DiscordRoom } from './DiscordRoom';
 import { useGameAudio } from './sound';
 import { Comparison } from './Comparison';
 
@@ -23,9 +24,10 @@ function Modal({ title, children, close }: { title: string; children: ReactNode;
   return <dialog ref={ref} aria-labelledby={titleId} className="modal" onCancel={close} onClick={e => { if (e.target === ref.current) close(); }}><div className="modal-inner"><header><h2 id={titleId}>{title}</h2><button className="icon-button" aria-label="Tutup" onClick={close}><Cross2Icon width={20} height={20} aria-hidden="true"/></button></header>{children}</div></dialog>;
 }
 function ConnectionBoard({ clues, answer, connections, similarities, result, motion }: { clues: string[]; answer?: string | null; connections?: number[]; similarities?: number[]; result?: StageResult; motion: boolean }) {
-  const goldId = useId().replace(/:/g, '');
+  const flowId = useId().replace(/:/g, '');
   const reward = !!result && !result.skipped && (result.score > 950 || (result.rank !== undefined && result.rank >= 1 && result.rank <= 10));
-  const rewardLabel = result?.score === 1000 ? result.connections.every(value => value >= .999) ? 'Sambungan sempurna' : 'Sambungan terkuat' : result?.rank && result.rank <= 10 ? '10 besar' : 'Sambungan kuat';
+  const perfect = !!result && !result.skipped && result.score === 1000;
+  const rewardLabel = perfect ? 'Sambungan sempurna' : result?.rank && result.rank <= 10 ? '10 besar' : 'Sambungan kuat';
   const board = useRef<HTMLDivElement>(null);
   const [geometry, setGeometry] = useState<{width:number;height:number;paths:string[]}>({width:600,height:100,paths:[]});
   useLayoutEffect(() => {
@@ -54,16 +56,17 @@ function ConnectionBoard({ clues, answer, connections, similarities, result, mot
     const ctx = gsap.context(() => {
       if (reward) {
         const timeline = gsap.timeline();
-        timeline.fromTo('.flow-mask', { attr:{'stroke-dasharray':'0 1'} }, { attr:{'stroke-dasharray':(_i:number,element:SVGPathElement)=>`${element.dataset.strength} 1`}, duration: .65, stagger: .04, ease: 'power3.out' })
+        timeline.fromTo('.flow-fill', { attr:{'stroke-dasharray':'0 1'} }, { attr:{'stroke-dasharray':(_i:number,element:SVGPathElement)=>`${element.dataset.strength} 1`}, duration: .65, stagger: .04, ease: 'power3.out' })
           .fromTo('.answer-node', { scale: .96 }, { scale: 1, duration: .32, ease: 'back.out(2)' }, .28)
           .fromTo('.reward-ring', { scale: .85, opacity: .65 }, { scale: 1.3, opacity: 0, duration: .4 }, .3)
           .fromTo('.reward-rays', { scale: .65, opacity: 0 }, { scale: 1, opacity: 1, duration: .2 }, .3)
           .to('.reward-rays', { opacity: 0, duration: .2 }, .5);
+        if (result?.score === 1000) timeline.to('.clue, .answer-node', { keyframes:[{x:-3},{x:3},{x:-2},{x:2},{x:0}], duration:.32, ease:'none' }, .25);
       }
-      if (answer !== undefined && !reward) gsap.fromTo('.flow-mask', { attr:{'stroke-dasharray':'0 1'} }, { attr:{'stroke-dasharray':(_i:number,element:SVGPathElement)=>`${element.dataset.strength} 1`}, duration: .55, stagger: .04, ease: 'power3.out' });
+      if (answer !== undefined && !reward) gsap.fromTo('.flow-fill', { attr:{'stroke-dasharray':'0 1'} }, { attr:{'stroke-dasharray':(_i:number,element:SVGPathElement)=>`${element.dataset.strength} 1`}, duration: .55, stagger: .04, ease: 'power3.out' });
     }, board);
     return () => ctx.revert();
-  }, [clues.join(','), answer, reward, motion]);
+  }, [clues.join(','), answer, reward, perfect, motion]);
   useEffect(() => {
     if (!board.current || !motion || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const ctx = gsap.context(() => {
@@ -71,29 +74,23 @@ function ConnectionBoard({ clues, answer, connections, similarities, result, mot
     }, board);
     return () => ctx.revert();
   }, [clues.join(','), motion]);
-  return <div ref={board} className={`connection-board ${clues.length === 3 ? 'three-clues' : ''} ${reward ? 'reward-board' : ''} ${motion ? 'flow-motion' : ''}`} data-reward={reward ? 'gold' : 'none'}>
+  return <div ref={board} className={`connection-board ${clues.length === 3 ? 'three-clues' : ''} ${reward ? 'reward-board' : ''} ${perfect ? 'perfect-board' : ''} ${motion ? 'flow-motion' : ''}`} data-reward={perfect ? 'red' : reward ? 'blue' : 'none'}>
     <div className="clue-grid">{clues.map((clue, i) => <div className="clue-branch" key={clue}><div className={`clue clue-${i}`}><span className="micro">{clues.length === 1 ? 'KATA HARI INI' : `PETUNJUK 0${i + 1}`}</span><strong>{clue}</strong><small className="clue-strength" aria-hidden={!connections} title={similarities ? `Cosine similarity: ${similarities[i].toFixed(3)}` : undefined}>{connections ? `${Math.round(connections[i] * 100)}% terhubung` : '\u00a0'}</small></div></div>)}</div>
-    <div className="connection-branches"><svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none" fill="none" aria-hidden="true"><defs><linearGradient id={goldId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={geometry.height}><stop stopColor="#e7b64c"/><stop offset=".5" stopColor="#fff0b5"/><stop offset="1" stopColor="#b47d18"/></linearGradient></defs>{geometry.paths.map((path, i) => {
+    <div className="connection-branches"><svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none" fill="none" aria-hidden="true"><defs><linearGradient id={flowId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={geometry.height}><stop stopColor={perfect ? '#e5484d' : '#1c7af8'}/><stop offset=".5" stopColor={perfect ? '#f77b7f' : '#68a5ff'}/><stop offset="1" stopColor={perfect ? '#e5484d' : '#1c7af8'}/></linearGradient></defs>{geometry.paths.map((path, i) => {
       const clue=clues[i];
       const strength = Math.max(0,Math.min(1,connections?.[i] ?? 0));
-      const color = reward ? `url(#${goldId})` : '#1c7af8';
-      const maskId=`${goldId}-connection-${i}`;
+      const color = reward ? `url(#${flowId})` : '#1c7af8';
       return <g key={clue ?? i} data-connection={i}>
         <path className="flow-base" d={path} pathLength="1" stroke="#d8e5f9" strokeWidth="2"/>
         {strength > 0 && <>
-          <mask id={maskId} maskUnits="userSpaceOnUse" x="-20" y="-20" width={geometry.width+40} height={geometry.height+40}>
-            <path className="flow-mask" d={path} pathLength="1" fill="none" stroke="white" strokeWidth="28" strokeDasharray={`${strength} 1`} data-strength={strength}/>
-          </mask>
-          <g mask={`url(#${maskId})`}>
-            <path className="flow-glow" d={path} pathLength="1" stroke={color} strokeWidth={reward ? 10 : 6}/>
-            <path className="flow-progress lit-link" d={path} pathLength="1" stroke={color} strokeWidth={reward ? 3 : 2.5}/>
-            <path className="flow-pulse" d={path} pathLength="1" stroke={color} strokeWidth={reward ? 4 : 2} strokeDasharray=".055 .945" style={{animationDelay:`${i * -.7}s`}}/>
-          </g>
+          <path className="flow-glow flow-fill" d={path} pathLength="1" stroke={color} strokeWidth={reward ? 8 : 6} strokeDasharray={`${strength} 1`} data-strength={strength}/>
+          <path className="flow-progress flow-fill lit-link" d={path} pathLength="1" stroke={color} strokeWidth={reward ? 3 : 2.5} strokeDasharray={`${strength} 1`} data-strength={strength}/>
+
         </>}
         {connections === undefined && <path className="flow-pulse" d={path} pathLength="1" stroke={color} strokeWidth="2" strokeDasharray=".055 .945" style={{animationDelay:`${i * -.7}s`}}/>}
       </g>;
     })}</svg></div>
-    <div className={`answer-node ${answer !== undefined ? 'answered' : ''}`}>{reward && <><span className="reward-ring" aria-hidden="true"/><svg className="reward-rays" viewBox="0 0 280 150" aria-hidden="true"><g stroke="#c88c20" strokeWidth="2" strokeLinecap="round"><path d="M20 55l-12-6m19 36-14 3m242-33 12-6m-19 36 14 3M75 10l-5-8m135 8 5-8M75 140l-5 8m135-8 5 8"/></g></svg></>}<span className="micro">{answer !== undefined ? 'KATAMU' : 'SATU KATA PENGHUBUNG'}</span><strong>{answer === null ? 'dilewati' : answer || '?'}</strong></div><span className="reward-label" aria-hidden={!reward}>{reward ? <>{rewardLabel}</> : '\u00a0'}</span>
+    <div className={`answer-node ${answer !== undefined ? 'answered' : ''}`}>{reward && <><span className="reward-ring" aria-hidden="true"/><svg className="reward-rays" viewBox="0 0 280 150" aria-hidden="true"><g stroke={perfect ? '#e5484d' : '#1c7af8'} strokeWidth="2" strokeLinecap="round"><path d="M20 55l-12-6m19 36-14 3m242-33 12-6m-19 36 14 3M75 10l-5-8m135 8 5-8M75 140l-5 8m135-8 5 8"/></g></svg></>}<span className="micro">{answer !== undefined ? 'Katamu' : 'Jawaban'}</span><strong>{answer === null ? 'dilewati' : answer || '?'}</strong></div><span className="reward-label" aria-hidden={!reward}>{reward ? <>{rewardLabel}</> : '\u00a0'}</span>
   </div>;
 }
 function AnimatedScore({ value }: { value: number }) {
@@ -108,11 +105,13 @@ function AnimatedScore({ value }: { value: number }) {
 }
 function shareText(run: RunView) {
   const squares = run.results.map(r => r.score >= 900 ? '🟦' : r.score >= 600 ? '🟩' : r.score >= 300 ? '🟨' : '⬜').join('');
-  return `Nyambung ${run.mode === 'random' ? 'Acak' : `#${run.number}`} · ${run.date}\n${squares}\n${num(run.total)} / 5.000\n${location.origin}`;
+  return `Nyambung ${run.mode === 'random' ? 'Acak' : `#${run.number}`} · ${run.date}\n${squares}\n${num(run.total)} / 5.000${platform.kind === 'browser' ? `\n${location.origin}` : ''}`;
 }
 export default function App() {
   const sound = useGameAudio();
-  const [mode, setMode] = useState<GameMode>(() => { try { return localStorage.getItem('nyambung-mode') === 'random' ? 'random' : 'daily'; } catch { return 'daily'; } });
+  const [platformReady, setPlatformReady] = useState(false);
+  const openedDiscord = useRef(false);
+  const [mode, setMode] = useState<GameMode>(() => { if (platform.kind === 'discord') return 'daily'; try { return localStorage.getItem('nyambung-mode') === 'random' ? 'random' : 'daily'; } catch { return 'daily'; } });
   const [randomStatus, setRandomStatus] = useState<RandomView | null>(null);
   const [daily, setDaily] = useState<DailyView | null>(null);
   const [run, setRun] = useState<RunView | null>(null);
@@ -135,11 +134,16 @@ export default function App() {
   const draftKey = run ? `nyambung-draft:${run.id}:${active}` : '';
   async function load() {
     setLoadError('');
-    try { await browserPlatform.bootstrap(); const data = await api<DailyView>('/daily'); offset.current = Date.parse(data.serverTime) - Date.now(); setDaily(data); if (mode === 'daily') setRun(data.run);
-      const random = await api<RandomView>('/random'); setRandomStatus(random); if (mode === 'random') setRun(random.run); }
-    catch { setLoadError('Belum bisa terhubung. Periksa koneksimu, lalu coba lagi.'); }
+    try { await platform.bootstrap(); setPlatformReady(true); const data = await api<DailyView>('/daily'); offset.current = Date.parse(data.serverTime) - Date.now(); setDaily(data); if (mode === 'daily') setRun(data.run);
+      const random = await api<RandomView>('/random'); setRandomStatus(random); if (mode === 'random') setRun(random.run);
+      if (platform.kind === 'discord' && !openedDiscord.current && data.available) {
+        const current = await api<RunView>('/runs', {});
+        openedDiscord.current = true; setRun(current); setMode('daily'); setActive(Math.max(0, current.results.length - 1)); setPage(current.completed ? 'results' : 'game');
+      } }
+    catch (e) { setLoadError(platform.kind === 'discord' ? (e as Error).message : 'Belum bisa terhubung. Periksa koneksimu, lalu coba lagi.'); }
   }
   useEffect(() => { void load(); }, []);
+  useEffect(() => { if (platformReady) void platform.updatePresence?.(run); }, [platformReady, run?.id, run?.results.length, run?.completed]);
   useEffect(() => {
     const viewport = window.visualViewport;
     const update = () => {
@@ -216,7 +220,7 @@ export default function App() {
   }
   async function share() {
     if (!run) return;
-    try { const result = await browserPlatform.share(shareText(run)); setShared(result === 'copied' ? 'Hasil tersalin!' : 'Hasil dibagikan!'); }
+    try { const result = await platform.share(shareText(run)); setShared(result === 'copied' ? 'Hasil tersalin!' : 'Hasil dibagikan!'); }
     catch (e) { if ((e as Error).name !== 'AbortError') { setShareFallback(true); setShared('Salin hasilmu di bawah ini.'); } }
   }
   const result: StageResult | undefined = run?.results[active];
@@ -227,32 +231,31 @@ export default function App() {
     const button = (event.target as HTMLElement).closest('button');
     if (button && !button.disabled && !(button.form && button.type === 'submit') && !button.hasAttribute('data-custom-sound')) sound.play('tap');
   }}>
-    <header className="site-header"><button className="brand" onClick={() => { setPage('home'); setError(''); }} aria-label="Nyambung, beranda"><span className="brand-icon"><Link2Icon width={25} height={25} aria-hidden="true"/></span>nyambung<span className="brand-period">.</span></button><nav aria-label="Menu utama"><button className="icon-button" onClick={() => setModal('help')} aria-label="Cara bermain"><QuestionMarkCircledIcon width={21} height={21} aria-hidden="true"/></button><button className="icon-button" onClick={() => void showStats()} aria-label="Statistik"><BarChartIcon width={21} height={21} aria-hidden="true"/></button></nav></header>
+    <header className="site-header"><button className="brand" onClick={() => { setPage('home'); setError(''); }} aria-label="Nyambung, beranda"><span className="brand-icon"><Link2Icon width={25} height={25} aria-hidden="true"/></span>nyambung<span className="brand-period">.</span></button><nav aria-label="Menu utama">{platform.kind === 'discord' && <DiscordRoom ready={platformReady} revision={run?.results.length ?? 0}/>}<button className="icon-button" onClick={() => setModal('help')} aria-label="Cara bermain"><QuestionMarkCircledIcon width={21} height={21} aria-hidden="true"/></button><button className="icon-button" onClick={() => void showStats()} aria-label="Statistik"><BarChartIcon width={21} height={21} aria-hidden="true"/></button></nav></header>
     <main ref={main} id="main-content" tabIndex={-1}>
       {page === 'home' && <section className="daily-lobby reveal" aria-labelledby="daily-title">
         <div className="mode-picker" role="group" aria-label="Mode permainan"><button aria-pressed={mode === 'daily'} disabled={busy} onClick={() => chooseMode('daily')}>Daily</button><button aria-pressed={mode === 'random'} disabled={busy} onClick={() => chooseMode('random')}>Acak</button></div>
         <div className="lobby-date">{mode === 'random' ? 'Main kapan saja · bisa diulang' : daily ? dateLabel(daily.date) : 'Memuat…'}</div>
         <h1 id="daily-title">{mode === 'random' ? 'Main acak' : `Daily #${daily?.number ? String(daily.number).padStart(3, '0') : '—'}`}</h1>
         <p className="lobby-instruction">Cari satu kata yang menghubungkan petunjuk.</p>
-        <ol className="lobby-stages" aria-label="Lima babak">{['Dua kata', 'Dua kata', 'Dua kata', 'Tiga kata', 'Dekat makna'].map((label, i) => <li key={i}><span className="lobby-stage-number">{homeRun?.results[i] ? <CheckIcon width={16} height={16} aria-hidden="true"/> : `0${i + 1}`}</span><span>{label}</span><span className="lobby-stage-symbol" aria-hidden="true">{i === 3 ? '⋮' : i === 4 ? '≈' : '↔'}</span></li>)}</ol>
-        <div className="lobby-rules"><span>1 tebakan per babak</span><span>Maks. 5.000 poin</span></div>
+        <div className="lobby-preview" aria-label="Hujan dan panas dihubungkan dengan payung"><ConnectionBoard clues={['hujan','panas']} answer="payung" connections={[1,.8]} motion={motion}/></div>
+        <div className="lobby-rules"><span>5 babak · 1 tebakan per babak</span><span>Maks. 5.000 poin</span></div>
         <button className="primary-button lobby-play" disabled={!available || busy} onClick={() => void begin()}>{busy ? <ReloadIcon className="spin" width={20} height={20} aria-hidden="true"/> : homeRun?.completed ? mode === 'random' ? 'Main lagi' : 'Lihat hasilmu' : homeRun ? 'Lanjutkan bermain' : 'Main'}{!busy && <ArrowRightIcon width={20} height={20} aria-hidden="true"/>}</button>
         {!available && daily && <p className="card-message">{mode === 'random' ? 'Soal acak belum tersedia.' : 'Puzzle hari ini belum tersedia.'}</p>}
         {mode === 'daily' && daily?.demo && <p className="lobby-demo">Demo · skor contoh</p>}
         {(error || loadError) && <p className="error-message" role="alert">{error || loadError} {loadError && <button onClick={() => void load()}>Coba lagi</button>}</p>}
       </section>}
       {page === 'game' && run && stage && <section className="game-page">
-        <div className="game-topline reveal"><button className="text-button" onClick={() => setPage('home')}><ChevronLeftIcon width={16} height={16} aria-hidden="true"/> Beranda</button><span>{run.mode === 'random' ? 'MODE ACAK' : `DAILY #${String(run.number).padStart(3, '0')}`} <span className="topline-divider">/</span> {dateLabel(run.date)}</span><span className="total-pill">{num(run.total)} poin</span></div>
-        <div className="stage-progress reveal" aria-label={`Stage ${active + 1} dari 5`}>{Array.from({ length: 5 }, (_, i) => <div key={i} className={`${i === active ? 'current' : ''} ${run.results[i] ? 'done' : ''}`}><span>{run.results[i] ? <CheckIcon width={14} height={14} aria-hidden="true"/> : `0${i + 1}`}</span><i/></div>)}</div>
-        <div className="game-heading reveal"><h1>Babak {active + 1} · {stageNames[stage.kind]}</h1><p>{stage.kind === 'closest' ? 'Cari kata lain dengan makna terdekat.' : `Cari satu kata yang menghubungkan ${stage.clues.length === 3 ? 'ketiga' : 'kedua'} petunjuk.`}</p></div>
-        <div className="game-paper reveal" aria-busy={busy}><ConnectionBoard clues={stage.clues} answer={result ? result.word : undefined} connections={result?.connections} similarities={result?.similarities} result={result} motion={motion}/>{!result ? <form className="answer-form" onSubmit={(e: FormEvent) => { e.preventDefault(); void submit(); }}><label htmlFor="answer">SATU KATA VERSIMU</label><div className={`input-wrap ${error ? 'input-error' : ''}`}><input ref={input} id="answer" value={word} onChange={e => changeWord(e.target.value)} placeholder="Kayaknya…" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={64} readOnly={busy} aria-describedby={error ? 'answer-error' : 'answer-note'}/><button type="submit" className="primary-button" disabled={!word.trim() || busy}>{busy ? <ReloadIcon width={19} height={19} aria-hidden="true" className="spin"/> : <>Sambungkan <ArrowRightIcon width={18} height={18} aria-hidden="true"/></>}</button></div><div className="input-meta"><span id="answer-note">Satu kata. Satu kesempatan. Hingga 1.000 poin.</span><button type="button" className="text-button" disabled={busy} onClick={() => setModal('skip')}>Lewati babak </button></div>{error && <p id="answer-error" className="error-message" role="alert">{error}</p>}</form> : <div className="stage-result" role="region" aria-label="Hasil tebakan" tabIndex={-1}><div className="score-block"><span className="micro">KEKUATAN KONEKSIMU</span><strong><AnimatedScore value={result.score}/><small> / 1.000</small></strong>{result.rank && <p className="rank-note">Peringkat <b>#{num(result.rank)}</b> dari {num(result.vocabularySize!)} kata</p>}</div><div className="best-answer"><span className="micro">SALAH SATU SAMBUNGAN TERBAIK</span><strong>{result.best} </strong>{run.mode !== 'random' && result.explanation && <p>{result.explanation}</p>}</div><button className="primary-button next-button" data-custom-sound onClick={next}>{run.completed ? 'Lihat hasil akhir' : 'Lanjut ke babak berikutnya'}<ArrowRightIcon width={19} height={19} aria-hidden="true"/></button></div>}</div>
+        <div className="game-topline reveal"><div className="game-context"><button className="icon-button game-back" onClick={() => setPage('home')} aria-label="Beranda" title="Beranda"><ChevronLeftIcon width={18} height={18} aria-hidden="true"/></button><span className="game-mode">{run.mode === 'random' ? 'Acak' : `Daily #${String(run.number).padStart(3, '0')}`}</span></div><span className="total-pill" aria-label={`${num(run.total)} dari 5.000 poin`}><b>{num(run.total)}</b><small> / 5.000</small></span></div>
+        <div className="game-heading reveal"><div className="round-title"><h1>{{ bridge2:'Dua kata', bridge3:'Tiga kata', closest:'Dekat makna' }[stage.kind]}</h1><span className="round-count">{active + 1}<span> / 5</span></span></div><div className="stage-progress" role="progressbar" aria-label="Progres babak" aria-valuemin={1} aria-valuemax={5} aria-valuenow={active + 1} aria-valuetext={`Babak ${active + 1} dari 5`}>{Array.from({ length: 5 }, (_, i) => <div key={i} className={`${i === active ? 'current' : ''} ${run.results[i] ? 'done' : ''}`} aria-hidden="true"><span/></div>)}</div></div>
+        <div className="game-paper reveal" aria-busy={busy}><ConnectionBoard clues={stage.clues} answer={result ? result.word : undefined} connections={result?.connections} similarities={result?.similarities} result={result} motion={motion}/>{!result ? <form className="answer-form" onSubmit={(e: FormEvent) => { e.preventDefault(); void submit(); }}><label className="sr-only" htmlFor="answer">SATU KATA VERSIMU</label><div className={`input-wrap ${error ? 'input-error' : ''}`}><input ref={input} id="answer" value={word} onChange={e => changeWord(e.target.value)} placeholder="Ketik satu kata…" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={64} readOnly={busy} aria-describedby={error ? 'answer-error' : 'answer-note'}/><button type="submit" className="primary-button submit-answer" aria-label={busy ? 'Mengirim jawaban' : 'Sambungkan'} title="Kirim jawaban" disabled={!word.trim() || busy}>{busy ? <ReloadIcon width={19} height={19} aria-hidden="true" className="spin"/> : <ArrowRightIcon width={22} height={22} aria-hidden="true"/>}</button></div><div className="input-meta"><span id="answer-note" className="sr-only">Satu kata, satu kesempatan. Maksimal 1.000 poin.</span><kbd className="enter-hint" aria-hidden="true">Enter ↵</kbd><button type="button" className="text-button" disabled={busy} onClick={() => setModal('skip')} aria-label="Lewati babak">Lewati</button></div>{error && <p id="answer-error" className="error-message" role="alert">{error}</p>}</form> : <div className="stage-result" role="region" aria-label="Hasil tebakan" tabIndex={-1}><div className="score-block"><span className="micro">Skor</span><strong><AnimatedScore value={result.score}/><small> / 1.000</small></strong>{result.rank && <p className="rank-note">Peringkat <b>#{num(result.rank)}</b> dari {num(result.vocabularySize!)} kata</p>}</div><div className="best-answer"><span className="micro">Terbaik</span><strong>{result.best} </strong>{run.mode !== 'random' && result.explanation && <p>{result.explanation}</p>}</div><button className="primary-button next-button" data-custom-sound aria-label={run.completed ? 'Lihat hasil akhir' : 'Lanjut ke babak berikutnya'} onClick={next}>{run.completed ? 'Hasil' : 'Lanjut'}<ArrowRightIcon width={19} height={19} aria-hidden="true"/></button></div>}</div>
         <p className="game-footnote">{run.demo ? 'MODE DEMO · Skor menggunakan contoh kurasi, belum embedding semantik.' : ''}</p>
       </section>}
       {page === 'results' && run && <section className="results-page"><div className="result-kicker reveal"> {run.mode === 'random' ? 'MODE ACAK' : `DAILY #${String(run.number).padStart(3, '0')}`} · {dateLabel(run.date)}</div><h1 className="reveal">{run.mode === 'random' ? 'Hasil acak' : 'Hasil daily'}</h1><div className="grand-score reveal"><span className="micro">TOTAL KONEKSIMU</span><strong><AnimatedScore value={run.total}/><small> / 5.000</small></strong><span className="score-underline"/></div>{run.mode === 'daily' && <Comparison runId={run.id}/>}<div className="results-list reveal">{run.results.map((r, i) => <div className="result-row" key={i}><span className="result-index">0{i + 1}</span><div className="result-words"><span>{r.clues.join(' / ')}</span><strong>{r.word || 'dilewati'}</strong><small>Terbaik: {r.best}</small></div><Chain value={r.score / 1000} small/><strong className="row-score">{num(r.score)}</strong></div>)}</div><div className="result-actions reveal"><button className="primary-button" onClick={() => void share()}>{shared && !shareFallback ? <CheckIcon width={18} height={18} aria-hidden="true"/> : <CopyIcon width={18} height={18} aria-hidden="true"/>}Bagikan hasil</button><button className="secondary-button" onClick={() => void showStats()}><BarChartIcon width={18} height={18} aria-hidden="true"/> Statistikmu</button></div><p className="share-status" data-shared={!!shared} role="status">{shared || 'Tanpa spoiler. Biar temanmu ikut penasaran.'}</p>{shareFallback && <textarea className="share-fallback" readOnly aria-label="Teks hasil untuk disalin" value={shareText(run)} onFocus={e => e.target.select()}/>}{run.mode === 'random' ? <div className="next-daily random-next"><span role={error ? 'alert' : undefined}>{error ? 'Belum bisa memulai. Coba lagi.' : 'Soal baru, lima babak lagi.'}</span><button className="primary-button" disabled={busy} onClick={() => void begin()}>Main lagi <ArrowRightIcon width={15} height={15} aria-hidden="true"/></button></div> : <div className="next-daily"><ClockIcon width={18} height={18} aria-hidden="true"/><span>{time === '00:00:00' ? 'Daily baru sudah tersedia.' : <>Daily berikutnya dalam <strong>{time}</strong></>}</span><button className="text-button" onClick={() => { setPage('home'); void load(); }}>Beranda <ArrowRightIcon width={15} height={15} aria-hidden="true"/></button></div>}{run.demo && <p className="demo-note">Mode demo · hasil ini memakai skor kurasi contoh.</p>}</section>}
     </main>
     <footer className="site-footer"><span>{mode === 'random' ? 'Mode acak · tanpa batas harian' : 'Daily berganti pukul 00.00 WIB'}</span><div>{page === 'home' && mode === 'daily' && daily && <span className="footer-countdown"> KATA BARU DALAM <b>{time}</b></span>}<button className="motion-button sound-button" data-custom-sound aria-label="Suara" aria-pressed={sound.enabled} onClick={sound.toggle}>{sound.enabled ? <SpeakerLoudIcon width={15} height={15} aria-hidden="true"/> : <SpeakerOffIcon width={15} height={15} aria-hidden="true"/>} Suara {sound.enabled ? 'on' : 'off'}</button><button className="motion-button" aria-pressed={motion} onClick={() => setMotion(!motion)}><PlayIcon width={15} height={15} aria-hidden="true"/> Motion {motion ? 'on' : 'off'}<span className={`toggle ${motion ? 'enabled' : ''}`}/></button></div></footer>
-    {modal === 'help' && <Modal title="Biar makin nyambung." close={() => setModal(null)}><p className="modal-lead">Lima babak. Cari kata dengan hubungan paling kuat.</p><ol className="help-list"><li><strong>01—03 / Di tengah kata</strong><p>Cari satu kata yang cocok dengan dua petunjuk. Misalnya <b>makanan + mall → restoran</b>.</p></li><li><strong>04 / Tiga sambungan</strong><p>Satu jawaban untuk tiga petunjuk. Usahakan cocok dengan semuanya.</p></li><li><strong>05 / Sedekat makna</strong><p>Cari kata dengan makna terdekat. Misalnya <b>gembira → senang</b>.</p></li></ol><div className="help-note"><p>Satu tebakan valid per babak. Jawaban alternatif tetap dapat poin. Kata tidak dikenal tidak menghabiskan kesempatan. Lewati berarti nol poin.</p></div><p className="help-small">Daily berganti pukul 00.00 WIB. Mode Acak bisa diulang tanpa mengubah streak atau statistik daily. Progres tersimpan di browser ini melalui cookie anonim. Menghapus cookie atau berpindah perangkat akan membuat identitas baru.</p><button className="primary-button full-button" onClick={() => setModal(null)}>Oke, sudah nyambung <CheckIcon width={18} height={18} aria-hidden="true"/></button></Modal>}
-    {modal === 'stats' && <Modal title="Cerita sambunganmu." close={() => setModal(null)}>{stats ? <><div className="stats-grid"><div><strong>{stats.completed}</strong><span>Daily selesai</span></div><div><strong>{stats.streak}</strong><span>Streak hari</span></div><div><strong>{num(stats.best)}</strong><span>Skor terbaik</span></div><div><strong>{num(stats.average)}</strong><span>Rata-rata</span></div></div><p className="help-small">Streak mengikuti tanggal puzzle dalam WIB. Selesaikan daily setiap hari untuk menjaga sambungannya. Statistik berlaku untuk identitas anonim di browser ini.</p></> : <p role="status">{statsError || 'Sedang merangkai statistik…'}</p>}</Modal>}
+    {modal === 'help' && <Modal title="Biar makin nyambung." close={() => setModal(null)}><p className="modal-lead">Lima babak. Cari kata dengan hubungan paling kuat.</p><ol className="help-list"><li><strong>01—03 / Di tengah kata</strong><p>Cari satu kata yang cocok dengan dua petunjuk. Misalnya <b>makanan + mall → restoran</b>.</p></li><li><strong>04 / Tiga sambungan</strong><p>Satu jawaban untuk tiga petunjuk. Usahakan cocok dengan semuanya.</p></li><li><strong>05 / Sedekat makna</strong><p>Cari kata dengan makna terdekat. Misalnya <b>gembira → senang</b>.</p></li></ol><div className="help-note"><p>Satu tebakan valid per babak. Jawaban alternatif tetap dapat poin. Kata tidak dikenal tidak menghabiskan kesempatan. Lewati berarti nol poin.</p></div><p className="help-small">Daily berganti pukul 00.00 WIB. Mode Acak bisa diulang tanpa mengubah streak atau statistik daily. {platform.kind === 'discord' ? 'Progres tersimpan pada akun Discord kamu. Riwayat browser anonim tetap terpisah.' : 'Progres tersimpan di browser ini melalui cookie anonim. Menghapus cookie atau berpindah perangkat akan membuat identitas baru.'}</p><button className="primary-button full-button" onClick={() => setModal(null)}>Oke, sudah nyambung <CheckIcon width={18} height={18} aria-hidden="true"/></button></Modal>}
+    {modal === 'stats' && <Modal title="Cerita sambunganmu." close={() => setModal(null)}>{stats ? <><div className="stats-grid"><div><strong>{stats.completed}</strong><span>Daily selesai</span></div><div><strong>{stats.streak}</strong><span>Streak hari</span></div><div><strong>{num(stats.best)}</strong><span>Skor terbaik</span></div><div><strong>{num(stats.average)}</strong><span>Rata-rata</span></div></div><p className="help-small">Streak mengikuti tanggal puzzle dalam WIB. Selesaikan daily setiap hari untuk menjaga sambungannya. {platform.kind === 'discord' ? 'Statistik mengikuti akun Discord kamu.' : 'Statistik berlaku untuk identitas anonim di browser ini.'}</p></> : <p role="status">{statsError || 'Sedang merangkai statistik…'}</p>}</Modal>}
     {modal === 'skip' && <Modal title="Lewati sambungan ini?" close={() => setModal(null)}><p className="modal-lead">Babak ini mendapat 0 poin dan jawaban terbaik akan dibuka. Kamu tetap bisa lanjut ke babak berikutnya.</p><div className="skip-actions"><button className="secondary-button" onClick={() => setModal(null)}>Pikir lagi</button><button className="primary-button" data-custom-sound onClick={() => void submit(true)}>Ya, lewati <ArrowRightIcon width={18} height={18} aria-hidden="true"/></button></div></Modal>}
   </div>;
 }

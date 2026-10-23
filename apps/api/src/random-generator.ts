@@ -6,7 +6,7 @@ import type { PublishedStage, ScoreEntry } from './scoring.js';
 export interface ClueProfile { word:string; similarities:number[]; baseline:number; reference:number }
 export interface ReviewedBridge { answer:string; facets:string[][]; source?:string; sense?:string }
 export interface RandomGenerator {
-  version:1|2|3|4; bridgePolicy?:'cross-context-v1'; packed?:PackedVectors; relations?:ReviewedBridge[]; words:string[]; answers:string[]; profiles:ClueProfile[]; excludedCombos:string[];
+  version:1|2|3|4; facetPolicy?:'distinct-roles-v1'; bridgePolicy?:'cross-context-v1'; packed?:PackedVectors; relations?:ReviewedBridge[]; words:string[]; answers:string[]; profiles:ClueProfile[]; excludedCombos:string[];
 }
 export interface GeneratedRound { kind:StageKind; clues:string[]; target?:string; features?:number[] }
 export interface GeneratedSelection { generator:1; rounds:GeneratedRound[]; closestIndex?:number; policy?:{version:'retrieval-ridge-v1';samples:number;weights:number[];explorations:number} }
@@ -101,12 +101,21 @@ export function selectRounds(data:RandomGenerator, pick:(limit:number)=>number, 
 const relationCache=new WeakMap<RandomGenerator,Map<string,number[]>>();
 export function reviewedAnswers(data:RandomGenerator,clues:string[]):string[] {
  let index=relationCache.get(data);if(!index) {
-  index=new Map();(data.relations??[]).forEach((relation,i)=>{for(const clue of relation.facets.flat()) {const list=index!.get(clue)??[];list.push(i);index!.set(clue,list);}});relationCache.set(data,index);
+  index=new Map();(data.relations??[]).forEach((relation,i)=>{for(const clue of new Set(relation.facets.flat())) {const list=index!.get(clue)??[];list.push(i);index!.set(clue,list);}});relationCache.set(data,index);
  }
  const candidates=clues.map(clue=>index!.get(clue)??[]).sort((a,b)=>a.length-b.length)[0]??[];
  return [...new Set(candidates.filter(i=>{
-  const relation=data.relations![i],facets=clues.map(clue=>relation.facets.findIndex(group=>group.includes(clue)));
-  return facets.every(i=>i>=0)&&new Set(facets).size===clues.length&&!clues.includes(relation.answer);
+  const relation=data.relations![i];
+  if(clues.includes(relation.answer)) return false;
+  const first=clues.map(clue=>relation.facets.findIndex(group=>group.includes(clue)));
+  if(first.some(index=>index<0)) return false;
+  if(new Set(first).size===clues.length) return true;
+  if(data.facetPolicy!=='distinct-roles-v1') return false;
+  // A clue may occur in several reviewed roles. Match distinct facets rather
+  // than rejecting a valid bridge because its first matching role overlaps.
+  const match=(position:number,used:Set<number>):boolean=>position===clues.length || relation.facets.some((group,index)=>
+    !used.has(index)&&group.includes(clues[position])&&match(position+1,new Set([...used,index])));
+  return match(0,new Set());
  }).map(i=>data.relations![i].answer))];
 }
 function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):PublishedStage|null {
@@ -138,24 +147,35 @@ function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):Publi
   for (const entry of Object.values(scores)) entry.rank=ranks[entry.score];
   return {...round,best,explanation:'',overrides:{},scores,vocabularySize:Object.keys(scores).length};
 }
+const reviewedCandidateCache=new WeakMap<RandomGenerator,Map<string,{round:GeneratedRound;answers:string[]}[]>>();
 function selectReviewedRounds(data:RandomGenerator,pick:(limit:number)=>number,excluded:Set<string>) {
   const blocked=new Set([...data.excludedCombos,...excluded]);
   const used=new Set<string>(), answers=new Set<string>(), rounds:GeneratedRound[]=[], stages:PublishedStage[]=[];
+  let cache=reviewedCandidateCache.get(data);
+  if(!cache) {cache=new Map();reviewedCandidateCache.set(data,cache);}
   for (const kind of ['bridge2','bridge2','bridge2','bridge3'] as const) {
-    const candidates:GeneratedRound[]=[];
-    for (const relation of data.relations ?? []) {
-      if (answers.has(relation.answer)) continue;
-      const groups=relation.facets;
-      for(let a=0;a<groups.length;a++) for(let b=a+1;b<groups.length;b++) {
-        for (const x of groups[a]) for (const y of groups[b]) {
-          if (kind==='bridge2') candidates.push({kind,clues:[x,y]});
-          else for(let c=b+1;c<groups.length;c++) for(const z of groups[c]) candidates.push({kind,clues:[x,y,z]});
+    let eligible=cache.get(kind);
+    if(!eligible) {
+      const candidates:GeneratedRound[]=[];
+      for (const relation of data.relations ?? []) {
+        const groups=relation.facets;
+        for(let a=0;a<groups.length;a++) for(let b=a+1;b<groups.length;b++) {
+          for (const x of groups[a]) for (const y of groups[b]) {
+            if (kind==='bridge2') candidates.push({kind,clues:[x,y]});
+            else for(let c=b+1;c<groups.length;c++) for(const z of groups[c]) candidates.push({kind,clues:[x,y,z]});
+          }
         }
       }
+      // Quality depends on the edition, while recency depends on each game.
+      // Compute the enlarged bank once rather than rechecking every edge per turn.
+      const unique=[...new Map(candidates.map(round=>[combinationKey(round.clues),round])).values()];
+      eligible=unique.map(round=>({round,answers:reviewedAnswers(data,round.clues).filter(answer=>bridgeSeparation(data,round.clues,answer).accepted)})).filter(candidate=>candidate.answers.length>0);
+      cache.set(kind,eligible);
     }
-    const pool=candidates.filter(round=>new Set(round.clues).size===round.clues.length && !blocked.has(combinationKey(round.clues)) && round.clues.every(word=>!used.has(word)) && reviewedAnswers(data,round.clues).some(answer=>bridgeSeparation(data,round.clues,answer).accepted));
+    const pool=eligible.filter(candidate=>!blocked.has(combinationKey(candidate.round.clues)) && candidate.round.clues.every(word=>!used.has(word)) && candidate.answers.every(answer=>!answers.has(answer)));
     if (!pool.length) throw new Error('Bank kurasi acak belum cukup untuk permainan baru.');
-    const round=pool[pick(pool.length)];
+    const selected=pool[pick(pool.length)].round;
+    const round={...selected,clues:[...selected.clues]};
     // Shuffle clue positions too, while keeping a deterministic stored descriptor.
     for(let i=round.clues.length-1;i>0;i--) {const j=pick(i+1);[round.clues[i],round.clues[j]]=[round.clues[j],round.clues[i]];}
     const stage=evaluateReviewedRound(data,round);

@@ -5,7 +5,7 @@ import { combinationKey, reviewedAnswers, evaluateRound, type RandomGenerator, t
 import type { PublishedStage } from './scoring.js';
 export interface Exposure { best:string; clues:string[] }
 export interface RetrievalContext { exposures:Exposure[]; model:DifficultyModel }
-export interface Candidate { round:GeneratedRound; answer:string; concept?:string; features:number[]; relevance:number; expected:number; separation:number }
+export interface Candidate { round:GeneratedRound; answer:string; concept?:string; features:number[]; relevance:number; expected:number; separation:number; pattern:string }
 const candidateCache=new WeakMap<RandomGenerator,Map<string,Candidate[]>>();
 const profileCache=new WeakMap<RandomGenerator,Map<string,RandomGenerator['profiles'][number]>>();
 const indexCache=new WeakMap<RandomGenerator,Map<string,number>>();
@@ -44,7 +44,8 @@ export function retrieveCandidates(data:RandomGenerator,kind:'bridge2'|'bridge3'
           // Hybrid retrieval: explicit reviewed edges establish validity; frozen
           // semantic similarities rank connection balance within that evidence.
           const relevance=.7+.2*Math.max(0,features[2])+.1*Math.max(0,features[3]);
-          const candidate={round,answer:relation.answer,concept:relation.sense??`word:${relation.answer}`,features,relevance,separation:separation.novelty,expected:predictDifficulty(model,features)};
+          const pattern=facetPattern(data,relation.answer,clues);
+          const candidate={round,pattern,answer:relation.answer,concept:relation.sense??`word:${relation.answer}`,features,relevance,separation:separation.novelty,expected:predictDifficulty(model,features)};
           const key=`${relation.answer}/${combinationKey(clues)}`;
           candidates.set(key,candidate);
         }
@@ -53,6 +54,27 @@ export function retrieveCandidates(data:RandomGenerator,kind:'bridge2'|'bridge3'
   }
   const result=[...candidates.values()];cache.set(kind,result);
   return result.filter(candidate=>!excluded.has(combinationKey(candidate.round.clues)));
+}
+// Alternative words in the same reviewed roles count as one context pattern.
+const facetCache=new WeakMap<RandomGenerator,Map<string,string[][]>>();
+function facetPattern(data:RandomGenerator,answer:string,clues:string[]):string {
+  let byAnswer=facetCache.get(data);
+  if(!byAnswer) {
+    byAnswer=new Map();
+    for(const relation of data.relations??[]) byAnswer.set(relation.answer,[...(byAnswer.get(relation.answer)??[]),...relation.facets]);
+    facetCache.set(data,byAnswer);
+  }
+  const roles=byAnswer.get(answer)??[];
+  return `${answer}/${[...new Set(clues.map(clue=>roles.findIndex(group=>group.includes(clue))))].sort((a,b)=>a-b).join(',')}`;
+}
+function weightedCandidate<T>(items:T[],score:(item:T)=>number,pick:(limit:number)=>number):T {
+  const values=items.map(score),maximum=Math.max(...values);
+  // Every eligible candidate remains reachable. Quality and novelty provide a
+  // smooth preference instead of limiting play to six clues / sixteen answers.
+  const weights=values.map(value=>Math.exp((value-maximum)/.18));
+  let remaining=pick(1_000_000)/1_000_000*weights.reduce((sum,value)=>sum+value,0);
+  for(let i=0;i<items.length;i++) {remaining-=weights[i];if(remaining<0) return items[i];}
+  return items[items.length-1];
 }
 export function selectRetrievedRounds(data:RandomGenerator,pick:(limit:number)=>number,excluded:Set<string>,context:RetrievalContext={exposures:[],model:trainDifficulty([])}):{selection:GeneratedSelection;stages:PublishedStage[]} {
   const blocked=new Set([...data.excludedCombos,...excluded]);
@@ -63,6 +85,14 @@ export function selectRetrievedRounds(data:RandomGenerator,pick:(limit:number)=>
     const concept=conceptByAnswer.get(entry.best)??`word:${entry.best}`;if(!conceptRecency.has(concept)) conceptRecency.set(concept,i);
     if(i<80) entry.clues.forEach(clue=>clueFrequency.set(clue,(clueFrequency.get(clue)??0)+1));
   });
+  const patternFrequency=new Map<string,number>(),pairFrequency=new Map<string,number>();
+  for(const entry of context.exposures.slice(0,160)) {
+    const pattern=facetPattern(data,entry.best,entry.clues);
+    patternFrequency.set(pattern,(patternFrequency.get(pattern)??0)+1);
+    entry.clues.forEach((clue,i)=>entry.clues.slice(i+1).forEach(other=>{
+      const key=combinationKey([clue,other]);pairFrequency.set(key,(pairFrequency.get(key)??0)+1);
+    }));
+  }
   let explorations=0;
   for(const [stageIndex,kind] of (['bridge2','bridge2','bridge2','bridge3'] as const).entries()) {
     let pool=retrieveCandidates(data,kind,context.model,blocked).filter(candidate=>
@@ -78,24 +108,30 @@ export function selectRetrievedRounds(data:RandomGenerator,pick:(limit:number)=>
       const oldest=Math.max(...pool.map(candidate=>answerRecency.get(candidate.answer)!));
       pool=pool.filter(candidate=>answerRecency.get(candidate.answer)!>=oldest-3);
     }
+    const pairRepeats=(candidate:Candidate)=>candidate.round.clues.reduce((sum,clue,i)=>sum+candidate.round.clues.slice(i+1).reduce((count,other)=>count+(pairFrequency.get(combinationKey([clue,other]))??0),0),0);
+    // A three-clue puzzle containing yesterday's two clues still feels familiar.
+    const freshPairs=pool.filter(candidate=>pairRepeats(candidate)===0);
+    if(freshPairs.length) pool=freshPairs;
     const target=[.65,.6,.55,.55][stageIndex];
-    const rank=(candidate:Candidate)=>{
+    const ranks=new Map<Candidate,number>();
+    for(const candidate of pool) {
       const shared=Math.max(0,...selected.map(previous=>overlap(previous.round.clues,candidate.round.clues)));
       const recentPattern=Math.max(0,...context.exposures.slice(0,40).map(previous=>overlap(previous.clues,candidate.round.clues)));
       const repeated=candidate.round.clues.reduce((sum,word)=>sum+Math.min(1,(clueFrequency.get(word)??0)/4),0)/candidate.round.clues.length;
-      return .2*candidate.relevance+.35*(1-Math.abs(candidate.expected-target))+.3*candidate.separation-.25*recentPattern-.2*repeated-.3*shared;
-    };
+      ranks.set(candidate,.2*candidate.relevance+.35*(1-Math.abs(candidate.expected-target))+.3*candidate.separation-.25*recentPattern-.2*repeated-.3*shared-.2*Math.min(3,patternFrequency.get(candidate.pattern)??0));
+    }
+    const rank=(candidate:Candidate)=>ranks.get(candidate)!;
     // Equal-size retrieval per answer prevents hubs with more facets from being
-    // sampled more often. MMR-style novelty penalties diversify the shortlist.
+    // sampled more often. Novelty weights diversify both clues and answer hubs.
     const perAnswer=new Map<string,Candidate[]>();
     for(const candidate of pool) {const list=perAnswer.get(candidate.answer)??[];list.push(candidate);perAnswer.set(candidate.answer,list);}
     const hubs=[...perAnswer.values()].map(list=>{
-      list.sort((a,b)=>rank(b)-rank(a));const shortlist=list.slice(0,6);
-      return shortlist[pick(shortlist.length)];
-    }).sort((a,b)=>rank(b)-rank(a));
+      const least=Math.min(...list.map(candidate=>patternFrequency.get(candidate.pattern)??0));
+      const patterns=list.filter(candidate=>(patternFrequency.get(candidate.pattern)??0)===least);
+      return weightedCandidate(patterns,rank,pick);
+    });
     const explore=pick(100)<20; if(explore) explorations++;
-    const shortlist=explore?hubs:hubs.slice(0,Math.min(16,hubs.length));
-    const chosen=shortlist[pick(shortlist.length)];
+    const chosen=explore?hubs[pick(hubs.length)]:weightedCandidate(hubs,rank,pick);
     const round:GeneratedRound={...chosen.round,clues:[...chosen.round.clues],target:chosen.answer,features:chosen.features};
     for(let i=round.clues.length-1;i>0;i--) {const j=pick(i+1);[round.clues[i],round.clues[j]]=[round.clues[j],round.clues[i]];}
     const stage=evaluateRound(data,round);if(!stage) throw new Error('Bukti hubungan retrieval tidak valid.');

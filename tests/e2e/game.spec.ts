@@ -31,7 +31,7 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await expect(input).toHaveValue('nongkrong');
   await input.fill('restoran'); await input.press('Enter');
   await expect(page.getByText('Restoran menyajikan makanan', { exact: false })).toBeVisible();
-  await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'red');
+  await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'green');
   await expect(page.locator('.reward-label')).toHaveText('Sambungan sempurna');
   await expect(page.locator('.connection-branches rect')).toHaveCount(0);
   await expect(page.locator('.flow-progress')).toHaveCount(2);
@@ -363,12 +363,12 @@ test('perfect answer shakes the cards briefly and respects reduced motion', asyn
  if(testInfo.project.name==='desktop') await expect.poll(()=>page.evaluate(()=>(window as any).cardMotion.moved)).toBe(true);
  else expect(await page.evaluate(()=>(window as any).cardMotion.moved)).toBe(false);
  await expect.poll(()=>page.locator('.clue').first().evaluate(el=>Math.abs(new DOMMatrixReadOnly(getComputedStyle(el).transform).m41))).toBe(0);
- await expect(page.locator('.connection-board')).toHaveAttribute('data-reward','red');
- await expect(page.locator('.answer-node strong')).toHaveCSS('color','rgb(207, 52, 59)');
- await expect(page.locator('.clue').first()).toHaveCSS('background-color','rgb(255, 245, 245)');
- await expect(page.locator('.score-block strong')).toHaveCSS('color','rgb(207, 52, 59)');
- await expect(page.locator('.next-button')).toHaveCSS('background-color','rgb(207, 52, 59)');
- await page.screenshot({path:`test-results/${testInfo.project.name}-perfect-red.png`});
+ await expect(page.locator('.connection-board')).toHaveAttribute('data-reward','green');
+ await expect(page.locator('.answer-node strong')).toHaveCSS('color','rgb(21, 128, 61)');
+ await expect(page.locator('.clue').first()).toHaveCSS('background-color','rgb(240, 253, 244)');
+ await expect(page.locator('.score-block strong')).toHaveCSS('color','rgb(21, 128, 61)');
+ await expect(page.locator('.next-button')).toHaveCSS('background-color','rgb(21, 128, 61)');
+ await page.screenshot({path:`test-results/${testInfo.project.name}-perfect-green.png`});
  if(testInfo.project.name==='desktop') {
   const next=page.locator('.next-button');
   await next.hover();await page.mouse.down();

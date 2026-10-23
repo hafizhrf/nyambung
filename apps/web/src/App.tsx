@@ -74,9 +74,9 @@ function ConnectionBoard({ clues, answer, connections, similarities, result, mot
     }, board);
     return () => ctx.revert();
   }, [clues.join(','), motion]);
-  return <div ref={board} className={`connection-board ${clues.length === 3 ? 'three-clues' : ''} ${reward ? 'reward-board' : ''} ${perfect ? 'perfect-board' : ''} ${motion ? 'flow-motion' : ''}`} data-reward={perfect ? 'red' : reward ? 'blue' : 'none'}>
+  return <div ref={board} className={`connection-board ${clues.length === 3 ? 'three-clues' : ''} ${reward ? 'reward-board' : ''} ${perfect ? 'perfect-board' : ''} ${motion ? 'flow-motion' : ''}`} data-reward={perfect ? 'green' : reward ? 'blue' : 'none'}>
     <div className="clue-grid">{clues.map((clue, i) => <div className="clue-branch" key={clue}><div className={`clue clue-${i}`}><span className="micro">{clues.length === 1 ? 'KATA HARI INI' : `PETUNJUK 0${i + 1}`}</span><strong>{clue}</strong><small className="clue-strength" aria-hidden={!connections} title={similarities ? `Cosine similarity: ${similarities[i].toFixed(3)}` : undefined}>{connections ? `${Math.round(connections[i] * 100)}% terhubung` : '\u00a0'}</small></div></div>)}</div>
-    <div className="connection-branches"><svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none" fill="none" aria-hidden="true"><defs><linearGradient id={flowId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={geometry.height}><stop stopColor={perfect ? '#e5484d' : '#1c7af8'}/><stop offset=".5" stopColor={perfect ? '#f77b7f' : '#68a5ff'}/><stop offset="1" stopColor={perfect ? '#e5484d' : '#1c7af8'}/></linearGradient></defs>{geometry.paths.map((path, i) => {
+    <div className="connection-branches"><svg viewBox={`0 0 ${geometry.width} ${geometry.height}`} preserveAspectRatio="none" fill="none" aria-hidden="true"><defs><linearGradient id={flowId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2={geometry.height}><stop stopColor={perfect ? '#16a34a' : '#1c7af8'}/><stop offset=".5" stopColor={perfect ? '#86efac' : '#68a5ff'}/><stop offset="1" stopColor={perfect ? '#16a34a' : '#1c7af8'}/></linearGradient></defs>{geometry.paths.map((path, i) => {
       const clue=clues[i];
       const strength = Math.max(0,Math.min(1,connections?.[i] ?? 0));
       const color = reward ? `url(#${flowId})` : '#1c7af8';
@@ -90,7 +90,7 @@ function ConnectionBoard({ clues, answer, connections, similarities, result, mot
         {connections === undefined && <path className="flow-pulse" d={path} pathLength="1" stroke={color} strokeWidth="2" strokeDasharray=".055 .945" style={{animationDelay:`${i * -.7}s`}}/>}
       </g>;
     })}</svg></div>
-    <div className={`answer-node ${answer !== undefined ? 'answered' : ''}`}>{reward && <><span className="reward-ring" aria-hidden="true"/><svg className="reward-rays" viewBox="0 0 280 150" aria-hidden="true"><g stroke={perfect ? '#e5484d' : '#1c7af8'} strokeWidth="2" strokeLinecap="round"><path d="M20 55l-12-6m19 36-14 3m242-33 12-6m-19 36 14 3M75 10l-5-8m135 8 5-8M75 140l-5 8m135-8 5 8"/></g></svg></>}<span className="micro">{answer !== undefined ? 'Katamu' : 'Jawaban'}</span><strong>{answer === null ? 'dilewati' : answer || '?'}</strong></div><span className="reward-label" aria-hidden={!reward}>{reward ? <>{rewardLabel}</> : '\u00a0'}</span>
+    <div className={`answer-node ${answer !== undefined ? 'answered' : ''}`}>{reward && <><span className="reward-ring" aria-hidden="true"/><svg className="reward-rays" viewBox="0 0 280 150" aria-hidden="true"><g stroke={perfect ? '#16a34a' : '#1c7af8'} strokeWidth="2" strokeLinecap="round"><path d="M20 55l-12-6m19 36-14 3m242-33 12-6m-19 36 14 3M75 10l-5-8m135 8 5-8M75 140l-5 8m135-8 5 8"/></g></svg></>}<span className="micro">{answer !== undefined ? 'Katamu' : 'Jawaban'}</span><strong>{answer === null ? 'dilewati' : answer || '?'}</strong></div><span className="reward-label" aria-hidden={!reward}>{reward ? <>{rewardLabel}</> : '\u00a0'}</span>
   </div>;
 }
 function AnimatedScore({ value }: { value: number }) {

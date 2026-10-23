@@ -5,7 +5,7 @@ import {selectRounds,evaluateRound,reviewedAnswers,type RandomGenerator} from '.
 import {reviewedBridges} from '../content/relations.js';
 import {openDatabase} from '../apps/api/src/db.js';
 import {game} from '../apps/api/src/game.js';
-import {compileRandomPool,publishRandomPool} from '../scripts/content.js';
+import {compileRandomPool,publishRandomPool,requalifyPublishedRandomPool} from '../scripts/content.js';
 function fixture():RandomGenerator {
  const clues=[...new Set(reviewedBridges.flatMap(r=>r.facets.flat()))];
  const words=[...new Set([...clues,...reviewedBridges.map(r=>r.answer)])];
@@ -74,5 +74,53 @@ it('trains future selections from persisted gameplay, counts retries once, and f
   expect(descriptor(other.id).policy.samples).toBe(4);
   expect(JSON.stringify(other)).not.toContain('weights');
   expect(JSON.stringify(other)).not.toContain('target');
+ } finally {store.sqlite.close();}
+});
+
+it('samples more than six clue sets per answer instead of staying in a fixed shortlist',()=>{
+ const data=fixture(),combinations=new Set<string>();
+ const exposures=data.relations!.filter(relation=>relation.answer!=='galon').map(relation=>({best:relation.answer,clues:[]}));
+ for(let seed=1;seed<=48;seed++) {
+  const {stages}=selectRounds(data,rng(seed*7919),new Set(),{exposures,model:trainDifficulty([])});
+  expect(stages[0].best).toBe('galon');
+  combinations.add([...stages[0].clues].sort().join('|'));
+ }
+ expect(combinations.size).toBeGreaterThan(6);
+});
+it('avoids reusing a previous pair inside either a two- or three-clue round',()=>{
+ const data=fixture(),pick=rng(91),context:RetrievalContext={exposures:[],model:trainDifficulty([])},pairs=new Set<string>();
+ for(let i=0;i<8;i++) {
+  const {stages}=selectRounds(data,pick,new Set(),context);
+  for(const stage of stages) {
+   stage.clues.forEach((clue,index)=>stage.clues.slice(index+1).forEach(other=>{
+    const pair=[clue,other].sort().join('|');expect(pairs.has(pair)).toBe(false);pairs.add(pair);
+   }));
+   context.exposures.unshift({best:stage.best,clues:stage.clues});
+  }
+ }
+});
+it('matches distinct reviewed roles when a clue belongs to more than one facet',()=>{
+ const data=fixture();data.facetPolicy='distinct-roles-v1';data.relations=[{answer:'kunci',facets:[['pintu','musik'],['pintu'],['jawaban']]}];
+ expect(reviewedAnswers(data,['pintu','musik'])).toEqual(['kunci']);
+ expect(reviewedAnswers(data,['pintu','musik','jawaban'])).toEqual(['kunci']);
+ expect(reviewedAnswers(data,['musik','nada'])).toEqual([]);
+ expect(reviewedAnswers({...data,facetPolicy:undefined},['pintu','musik'])).toEqual([]);
+});
+
+it('expands an existing bank while retaining legacy lexical senses and frozen snapshots',()=>{
+ const store=openDatabase(':memory:');
+ try {
+  const snapshot=compileRandomPool(store,true),data=fixture();
+  const legacy={answer:'kunci',facets:[['pintu'],['musik']],source:'wordnet-bahasa',sense:'legacy-key'};
+  data.relations=[...data.relations!.slice(0,10),legacy];snapshot.generator=data;
+  publishRandomPool(store,snapshot,true);
+  const before=store.sqlite.prepare('SELECT snapshot FROM puzzle_versions').all();
+  const revised=requalifyPublishedRandomPool(store);
+  expect(revised.generator!.relations!.length).toBeGreaterThan(data.relations.length);
+  expect(revised.generator!.relations).toContainEqual(legacy);
+  expect(revised.generator!.relations!.some(relation=>relation.answer==='motif')).toBe(true);
+  expect(store.sqlite.prepare('SELECT snapshot FROM puzzle_versions').all()).toEqual(before);
+  publishRandomPool(store,revised,true);
+  expect(requalifyPublishedRandomPool(store)).toEqual(revised);
  } finally {store.sqlite.close();}
 });

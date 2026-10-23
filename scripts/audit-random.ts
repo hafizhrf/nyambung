@@ -6,12 +6,13 @@ import {selectRounds,combinationKey,type RandomGenerator,type GeneratedSelection
 import {trainDifficulty,type Observation} from '../apps/api/src/adaptive.js';
 import {roundFeatures,retrieveCandidates,type RetrievalContext} from '../apps/api/src/retrieval.js';
 import {bridgeSeparation} from '../apps/api/src/bridge-quality.js';
+import {requalifyPublishedRandomPool} from './content.js';
 try {process.loadEnvFile('.env');} catch { /* optional */ }
 const store=openDatabase();
 try {
  const row=store.sqlite.prepare("SELECT v.snapshot FROM random_pool p JOIN puzzle_versions v ON p.version_id=v.id WHERE p.id='active'").get() as {snapshot:string}|undefined;
  if(!row) throw Error('Bank acak belum diterbitkan.');
- const snapshot=JSON.parse(row.snapshot),data=snapshot.generator as RandomGenerator;
+ const snapshot=process.argv.includes('--preview')?requalifyPublishedRandomPool(store):JSON.parse(row.snapshot),data=snapshot.generator as RandomGenerator;
  if(![3,4].includes(data?.version)) throw Error('Audit memerlukan generator retrieval v3/v4.');
  const outcomes=store.sqlite.prepare("SELECT a.result FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.mode='random' AND a.stage<4 ORDER BY r.rowid DESC LIMIT 1000").all() as {result:string}[];
  const observations:Observation[]=[];
@@ -34,8 +35,15 @@ try {
  const familyCollisions=games.flatMap(game=>game.rounds).filter(round=>hasWordFamilyCollision([...round.clues,round.best])).length;
  const separations=games.flatMap(game=>game.rounds).map(round=>bridgeSeparation(data,round.clues,round.best));
  const candidates=[...retrieveCandidates(data,'bridge2',model,new Set()),...retrieveCandidates(data,'bridge3',model,new Set())];
- const report={tooClose:separations.filter(value=>!value.accepted).length,eligibleCombinations:candidates.length,eligibleAnswers:new Set(candidates.map(candidate=>candidate.answer)).size,familyCollisions,generator:data.version,hubs:data.relations!.length,profiles:new Set(data.relations!.flatMap(row=>row.facets.flat())).size,modelSamples:model.samples,games:10,bridgeRounds:answers.length,distinctAnswers:new Set(answers).size,distinctConcepts:new Set(answers.map(answer=>concepts.get(answer))).size,distinctClueSets:excluded.size,elapsedMs:Date.now()-started,details:games};
- mkdirSync('data',{recursive:true});writeFileSync('data/random-audit.json',JSON.stringify(report,null,2));
- if(report.tooClose!==0||report.familyCollisions!==0||report.distinctAnswers!==40||report.distinctConcepts!==40||report.distinctClueSets!==40) throw Error('Audit gagal: terdapat clue terlalu dekat atau pengulangan dalam 10 permainan.');
- console.log(JSON.stringify({...report,details:undefined,report:'data/random-audit.json'},null,2));
+ const clueCounts=new Map<string,number>(),pairCounts=new Map<string,number>();
+ for(const round of games.flatMap(game=>game.rounds)) {
+  round.clues.forEach((clue,i)=>{
+   clueCounts.set(clue,(clueCounts.get(clue)??0)+1);
+   round.clues.slice(i+1).forEach(other=>{const pair=combinationKey([clue,other]);pairCounts.set(pair,(pairCounts.get(pair)??0)+1);});
+  });
+ }
+ const report={preview:process.argv.includes('--preview'),distinctClues:clueCounts.size,repeatedPairs:[...pairCounts.values()].reduce((sum,count)=>sum+Math.max(0,count-1),0),maximumClueUses:Math.max(0,...clueCounts.values()),eligiblePatterns:new Set(candidates.map(candidate=>candidate.pattern)).size,tooClose:separations.filter(value=>!value.accepted).length,eligibleCombinations:candidates.length,eligibleAnswers:new Set(candidates.map(candidate=>candidate.answer)).size,familyCollisions,generator:data.version,hubs:data.relations!.length,profiles:new Set(data.relations!.flatMap(row=>row.facets.flat())).size,modelSamples:model.samples,games:10,bridgeRounds:answers.length,distinctAnswers:new Set(answers).size,distinctConcepts:new Set(answers.map(answer=>concepts.get(answer))).size,distinctClueSets:excluded.size,elapsedMs:Date.now()-started,details:games};
+ mkdirSync('data',{recursive:true});writeFileSync(process.argv.includes('--preview')?'data/random-audit-preview.json':'data/random-audit.json',JSON.stringify(report,null,2));
+ if(report.repeatedPairs!==0||report.tooClose!==0||report.familyCollisions!==0||report.distinctAnswers!==40||report.distinctConcepts!==40||report.distinctClueSets!==40) throw Error('Audit gagal: terdapat clue terlalu dekat, pasangan clue berulang, atau jawaban berulang dalam 10 permainan.');
+ console.log(JSON.stringify({...report,details:undefined,report:process.argv.includes('--preview')?'data/random-audit-preview.json':'data/random-audit.json'},null,2));
 } finally {store.sqlite.close();}

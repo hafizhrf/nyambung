@@ -70,7 +70,7 @@ export function compileRandomPool(store: Store, demo = false, generated = !demo)
   let generator:RandomGenerator | undefined;
   let stages:(typeof randomStages[number] & {concept?:string})[]=randomStages;
   if (generated && !demo) {
-    generator={version:4,bridgePolicy:'cross-context-v1',packed:packVectors(words,vectors),words,answers:[],relations:reviewedBridges,profiles:[],excludedCombos:[...puzzles.flat(),...randomStages].map(stage=>combinationKey(stage.clues))};
+    generator={version:4,facetPolicy:'distinct-roles-v1',bridgePolicy:'cross-context-v1',packed:packVectors(words,vectors),words,answers:[],relations:reviewedBridges,profiles:[],excludedCombos:[...puzzles.flat(),...randomStages].map(stage=>combinationKey(stage.clues))};
     const lexical=compileLexicalBank(generator);
     generator.relations=[...reviewedBridges,...lexical.relations];
     generator.answers=generator.relations.map(relation=>relation.answer);
@@ -100,7 +100,19 @@ export function requalifyPublishedRandomPool(store: Store): Snapshot {
   const snapshot = JSON.parse(row.snapshot) as Snapshot;
   if (!snapshot.generator || snapshot.generator.version < 3) throw new Error('Bank ini belum memakai retrieval. Siapkan bank baru terlebih dahulu.');
   snapshot.generator.bridgePolicy = 'cross-context-v1';
-  const {synonyms}=compileLexicalBank(snapshot.generator);
+  snapshot.generator.facetPolicy = 'distinct-roles-v1';
+  const generator=snapshot.generator,available=new Set(generator.words);
+  const previousLexical=(generator.relations??[]).filter(relation=>relation.source==='wordnet-bahasa');
+  const profiles=new Set(generator.profiles.map(profile=>profile.word));
+  const reviewed=reviewedBridges.filter(relation=>[relation.answer,...relation.facets.flat()].every(word=>available.has(word))
+    && (generator.version===4 || relation.facets.flat().every(word=>profiles.has(word))));
+  const answers=new Set(reviewed.map(relation=>relation.answer));
+  generator.relations=[...reviewed,...(generator.relations??[]).filter(relation=>relation.source!=='wordnet-bahasa'&&!answers.has(relation.answer))];
+  const {synonyms,relations}=compileLexicalBank(generator);
+  // Retain source-backed senses from earlier editions. The runtime quality
+  // gate still rejects trivial clues; rebuilding must not discard valid puzzles.
+  generator.relations=[...new Map([...generator.relations,...previousLexical,...relations].map(relation=>[JSON.stringify(relation),relation])).values()];
+  generator.answers=[...new Set(generator.relations.map(relation=>relation.answer))];
   const human=randomStages.filter(stage=>stage.kind==='closest').map(stage=>({...stage,concept:synonyms.find(other=>other.clues[0]===stage.clues[0])?.concept}));
   const known=new Set(human.map(stage=>stage.clues[0]));
   snapshot.stages=[...human,...synonyms.filter(stage=>!known.has(stage.clues[0]))].map(stage=>({...stage,scores:{},vocabularySize:snapshot.generator!.words.length-1}));

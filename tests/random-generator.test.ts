@@ -86,18 +86,20 @@ it('varies reviewed combinations, keeps all clues explainable and avoids recent 
   for(let i=0;i<15;i++) {
     const {selection,stages}=selectRounds(data,rng(i+1),history);
     expect(selection.rounds.map(round=>round.kind)).toEqual(['bridge2','bridge2','bridge2','bridge3']);
+    const restored=JSON.parse(JSON.stringify(data)) as RandomGenerator;
     selection.rounds.forEach((round,index)=>{
       expect(history.has(combinationKey(round.clues))).toBe(false);
       expect(reviewedAnswers(data,round.clues)).toContain(stages[index].best);
-      expect(evaluateRound(JSON.parse(JSON.stringify(data)),round)).toEqual(stages[index]);
+      expect(evaluateRound(restored,round)).toEqual(stages[index]);
       history.add(combinationKey(round.clues));
     });
   }
   expect(history.size).toBe(60);
+  const wordSet=new Set(vocabulary);
   for(const relation of reviewedBridges) {
     expect(relation.facets.length).toBeGreaterThanOrEqual(3);
     expect(relation.facets.flat()).not.toContain(relation.answer);
-    for(const word of [relation.answer,...relation.facets.flat()]) expect(vocabulary).toContain(word);
+    for(const word of [relation.answer,...relation.facets.flat()]) expect(wordSet.has(word)).toBe(true);
   }
 },15000);
 it('rotates every synonym before repeating, for generated and legacy pools',()=>{

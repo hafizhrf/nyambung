@@ -20,7 +20,7 @@ export function compileLexicalBank(data:RandomGenerator) {
  for(const record of rawRelations) {
   if(manual.has(record.answer)||!usable(record.answer)) continue;
   const facets=record.facets.map(group=>group.filter(word=>usable(word)&&!derivative(word,record.answer)&&!areSynonyms(word,record.answer)&&similarity(word,record.answer)>=.14)
-   .sort((a,b)=>similarity(b,record.answer)-similarity(a,record.answer)).slice(0,2)).filter(group=>group.length);
+   .sort((a,b)=>similarity(b,record.answer)-similarity(a,record.answer)).slice(0,4)).filter(group=>group.length);
   if(facets.length<2) continue;
   const playable=facets.some((group,i)=>facets.slice(i+1).some(other=>group.some(a=>other.some(b=>bridgeSeparation(data,[a,b],record.answer).accepted))));
   if(!playable) continue;

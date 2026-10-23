@@ -173,3 +173,13 @@ demo. Setelah `preview`, `refresh-upcoming --approve HASH` dapat merevisi tangga
 **setelah hari ini** yang belum mempunyai sesi. Operasi ditolak secara atomik bila
 salah satu tanggal tersebut sudah pernah dimulai. Daily hari ini tidak berubah.
 Ambil `npm run backup` sebelum revisi database yang sudah digunakan.
+
+Mode acak mengambil sampel berbobot dari seluruh kandidat yang lolos, dengan
+rotasi jawaban, konteks, dan pasangan clue. Pasangan yang baru muncul juga
+dihindari saat menjadi bagian soal tiga clue; jika bank menyempit, kebijakan
+kembali memakai kandidat valid yang tersedia. Kurasi memuat makna ganda, idiom,
+kegiatan, dan konsep abstrak, selain benda dan bahan. Audit preview tanpa
+mengganti bank aktif: `npm run audit:random -- --preview`. Laporan mencakup jumlah
+puzzle yang lolos, pola konteks, clue unik, dan pasangan berulang. Untuk memperbarui
+bank dengan embedding tersimpan, gunakan `preview-random --reuse-published`, lalu
+`publish-random --reuse-published --approve HASH` sesuai hash preview.

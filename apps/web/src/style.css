@@ -613,14 +613,14 @@ html[data-keyboard='open'] .site-shell { grid-template-rows:36px minmax(0,1fr); 
  .histogram-bars { height:18px; }
 }
 
-/* Perfect is a red accent; other high scores retain the cobalt palette. */
-.perfect-board { --perfect:#e5484d; }
-.perfect-board .clue { background:#fff5f5; border-color:#f4bdc0; }
-.perfect-board .clue strong,.perfect-board .answer-node strong { color:#cf343b; }
-.perfect-board .clue-strength,.perfect-board .clue .micro,.perfect-board .answer-node .micro { color:#aa6268; }
-.perfect-board .answer-node { background:#fff5f5; border-color:var(--perfect); box-shadow:0 0 0 3px #e5484d0a; }
+/* Perfect is a green accent; other high scores retain the cobalt palette. */
+.perfect-board { --perfect:#16a34a; }
+.perfect-board .clue { background:#f0fdf4; border-color:#bbf7d0; }
+.perfect-board .clue strong,.perfect-board .answer-node strong { color:#15803d; }
+.perfect-board .clue-strength,.perfect-board .clue .micro,.perfect-board .answer-node .micro { color:#427a55; }
+.perfect-board .answer-node { background:#f0fdf4; border-color:var(--perfect); box-shadow:0 0 0 3px #16a34a0a; }
 .perfect-board .reward-ring { border-color:var(--perfect); }
-.perfect-board .reward-label { color:#cf343b; }
+.perfect-board .reward-label { color:#15803d; }
 
 /* Short, tactile motion for pointer, touch and keyboard controls. */
 button { -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
@@ -637,9 +637,9 @@ button { -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 }
 html[data-motion='off'] button:active,html[data-motion='off'] button:hover { transform:none; }
 @media (prefers-reduced-motion:reduce) { button:active,button:hover { transform:none!important; } }
-.game-paper:has(.perfect-board) .score-block strong { color:#cf343b; }
-.game-paper:has(.perfect-board) .next-button { background:#e5484d; border-color:#e5484d; box-shadow:0 3px 0 #b82c35; }
-.game-paper:has(.perfect-board) .next-button:hover:not(:disabled) { background:#cf343b; }
+.game-paper:has(.perfect-board) .score-block strong { color:#15803d; }
+.game-paper:has(.perfect-board) .next-button { background:#16a34a; border-color:#16a34a; box-shadow:0 3px 0 #166534; }
+.game-paper:has(.perfect-board) .next-button:hover:not(:disabled) { background:#15803d; }
 @media (prefers-reduced-motion:no-preference) {
  html:not([data-motion='off']) button:active:not(:disabled) { transform:translateY(2px) scale(.97); }
  html:not([data-motion='off']) .primary-button:active:not(:disabled) { box-shadow:none; }
@@ -647,7 +647,7 @@ html[data-motion='off'] button:active,html[data-motion='off'] button:hover { tra
 
 /* Focus stays on Continue for Enter navigation, without an outer frame. */
 .next-button:focus-visible { outline:none; background:#105ed2; text-decoration:underline; text-decoration-thickness:1px; text-underline-offset:4px; }
-.game-paper:has(.perfect-board) .next-button:focus-visible { background:#cf343b; }
+.game-paper:has(.perfect-board) .next-button:focus-visible { background:#15803d; }
 @media (prefers-reduced-motion:no-preference) {
  html:not([data-motion='off']) .clue,html:not([data-motion='off']) .answer-node { transition:background-color .25s,border-color .25s,box-shadow .25s; }
 }

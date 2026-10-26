@@ -82,6 +82,53 @@ export function openDatabase(path = process.env.DATABASE_PATH || resolve(import.
       CREATE TABLE IF NOT EXISTS discord_interactions (id TEXT PRIMARY KEY, reply TEXT NOT NULL, expires_at INTEGER NOT NULL);
       INSERT INTO migrations(version) VALUES (5);`);
   }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 6').get()) return;
+    // Early v5 deployments predate interaction reply caching. Repair forward
+    // without replaying Discord identity/session migrations or changing runs.
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS discord_interactions (id TEXT PRIMARY KEY, reply TEXT NOT NULL, expires_at INTEGER NOT NULL);
+      INSERT INTO migrations(version) VALUES (6);`);
+  }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 7').get()) return;
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS discord_activity_players (
+      instance_id TEXT NOT NULL, discord_id TEXT NOT NULL REFERENCES discord_identities(discord_id),
+      guild_id TEXT NOT NULL, channel_id TEXT NOT NULL, run_id TEXT REFERENCES runs(id), last_seen INTEGER NOT NULL,
+      PRIMARY KEY(instance_id,discord_id));
+      CREATE INDEX IF NOT EXISTS discord_active_channel ON discord_activity_players(guild_id,channel_id,last_seen);
+      CREATE TABLE IF NOT EXISTS discord_channel_runs (
+        channel_id TEXT NOT NULL, run_id TEXT NOT NULL REFERENCES runs(id), guild_id TEXT NOT NULL,
+        discord_id TEXT NOT NULL REFERENCES discord_identities(discord_id), seen_at INTEGER NOT NULL,
+        PRIMARY KEY(channel_id,run_id));
+      CREATE TABLE IF NOT EXISTS discord_channel_reports (
+        channel_id TEXT NOT NULL, date TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('live','recap')),
+        guild_id TEXT NOT NULL, message_id TEXT, payload TEXT, sent_hash TEXT,
+        next_at INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
+        uncertain INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+        PRIMARY KEY(channel_id,date,kind));
+      INSERT INTO migrations(version) VALUES (7);`);
+  }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 8').get()) return;
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS discord_channel_cards (
+      channel_id TEXT PRIMARY KEY, date TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'live',
+      guild_id TEXT NOT NULL, message_id TEXT, payload TEXT, sent_hash TEXT,
+      next_at INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
+      uncertain INTEGER NOT NULL DEFAULT 0, last_error TEXT);
+      INSERT OR IGNORE INTO discord_channel_cards(channel_id,date,guild_id,message_id,uncertain)
+        SELECT r.channel_id,r.date,r.guild_id,r.message_id,r.uncertain FROM discord_channel_reports r
+        WHERE r.kind='live' AND NOT EXISTS (SELECT 1 FROM discord_channel_reports newer
+          WHERE newer.kind='live' AND newer.channel_id=r.channel_id AND newer.date>r.date);
+      INSERT INTO migrations(version) VALUES (8);`);
+  }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 9').get()) return;
+    const columns=sqlite.pragma('table_info(discord_channel_cards)') as {name:string}[];
+    for(const [name,type] of [['revision','INTEGER NOT NULL DEFAULT 0'],['last_bump_at','INTEGER NOT NULL DEFAULT 0'],['active_keys',"TEXT NOT NULL DEFAULT '[]'"]]){
+      if(!columns.some(column=>column.name===name))sqlite.exec(`ALTER TABLE discord_channel_cards ADD COLUMN ${name} ${type}`);
+    }
+    sqlite.exec('INSERT INTO migrations(version) VALUES (9)');
+  }).immediate();
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 export type Store = ReturnType<typeof openDatabase>;

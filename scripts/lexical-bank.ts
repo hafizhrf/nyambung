@@ -27,8 +27,11 @@ export function compileLexicalBank(data:RandomGenerator) {
   const confidence=facets.flat().reduce((sum,word)=>sum+similarity(word,record.answer),0)/facets.flat().length;
   if(confidence<.2) continue;
   const quality=confidence+(facets.length>=3?.1:0);
-  const existing=candidates.get(record.answer);
-  if(!existing||quality>existing.quality) candidates.set(record.answer,{relation:{answer:record.answer,facets,source:record.source,sense:record.sense},quality});
+  // Keep each independently supported sense. Choosing a single sense per
+  // answer discarded other contexts even when their clues passed every gate.
+  const key=`${record.answer}/${record.sense}`;
+  const existing=candidates.get(key);
+  if(!existing||quality>existing.quality) candidates.set(key,{relation:{answer:record.answer,facets,source:record.source,sense:record.sense},quality});
  }
  const relations=[...candidates.values()].sort((a,b)=>b.quality-a.quality).slice(0,6000).map(row=>row.relation);
  const synonyms:(ContentStage & {concept:string})[]=[];

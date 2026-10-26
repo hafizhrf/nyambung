@@ -5,6 +5,7 @@ import { createApp } from '../apps/api/src/app.js';
 import { compilePackets, publish } from '../scripts/content.js';
 import { daily, embeddings } from '../apps/api/src/schema.js';
 import { game } from '../apps/api/src/game.js';
+import { addDays } from '../apps/api/src/time.js';
 import type { Snapshot } from '../apps/api/src/scoring.js';
 let store: Store;
 let app: ReturnType<typeof createApp>;
@@ -21,6 +22,60 @@ beforeEach(async () => {
 });
 afterEach(() => store.sqlite.close());
 describe('daily API', () => {
+  it('lists only past published dates with private progress and resumes each date independently', async () => {
+    expect((await request('/archive')).json.entries).toEqual([]);
+    now = new Date('2026-10-24T01:00:00Z');
+    const archive = (await request('/archive')).json;
+    expect(archive.today).toBe('2026-10-24');
+    expect(archive.entries).toEqual([
+      {date:'2026-10-23',number:2,demo:true,status:'new'},
+      {date:'2026-10-22',number:1,demo:true,status:'new'},
+    ]);
+    expect(JSON.stringify(archive)).not.toMatch(/snapshot|clues|best|restoran/);
+    const past = (await request('/runs',{date:'2026-10-22'})).json;
+    expect(past.date).toBe('2026-10-22');
+    expect(past.current.clues).toEqual(['makanan','mall']);
+    await request(`/runs/${past.id}/answers`,{stage:0,word:'restoran'});
+    const resumed = (await request('/runs',{date:'2026-10-22'})).json;
+    expect(resumed.id).toBe(past.id); expect(resumed.total).toBe(1000);
+    expect((await request('/daily')).json.run).toBeNull();
+    const today = (await request('/runs',{})).json;
+    expect(today.date).toBe('2026-10-24'); expect(today.id).not.toBe(past.id);
+    expect((await request('/archive')).json.entries[1].status).toBe('in_progress');
+    for(let stage=1;stage<5;stage++) await request(`/runs/${past.id}/answers`,{stage,skip:true});
+    expect((await request('/archive')).json.entries[1].status).toBe('completed');
+    expect((await request('/runs',{date:'2026-10-22'})).json.completed).toBe(true);
+    expect((await request('/me/stats')).json).toMatchObject({completed:1,streak:0});
+    const stranger = (await request('/daily',undefined,'')).cookie!;
+    expect((await request('/archive',undefined,stranger)).json.entries.every((entry:any)=>entry.status==='new')).toBe(true);
+    expect((await request(`/runs/${past.id}`,undefined,stranger)).status).toBe(404);
+  });
+  it('rejects invalid, missing and future archive dates without creating runs', async () => {
+    for(const date of ['2026-02-30','2026-2-01','2026-10-22T00:00:00Z','garbage','']) {
+      expect((await request('/runs',{date})).status).toBe(400);
+      expect((await request(`/archive?before=${encodeURIComponent(date)}`)).status).toBe(400);
+    }
+    expect((await request('/runs',{date:123})).status).toBe(400);
+    expect((await request('/runs',{date:null})).status).toBe(400);
+    expect((await request('/runs',{date:'2026-10-23'})).status).toBe(404);
+    expect((await request('/runs',{date:'2026-10-21'})).status).toBe(404);
+    expect((await request('/archive?before=2030-01-01')).json.entries).toEqual([]);
+    expect(store.sqlite.prepare('SELECT COUNT(*) AS count FROM runs').get()).toEqual({count:0});
+  });
+  it('paginates older dates without duplicates and follows midnight in WIB', async () => {
+    now = new Date('2026-10-22T16:59:59Z');
+    expect((await request('/archive')).json.entries).toHaveLength(0);
+    now = new Date('2026-10-22T17:00:00Z');
+    expect((await request('/archive')).json.entries[0].date).toBe('2026-10-22');
+    const template = store.orm.select().from(daily).get()!;
+    store.orm.insert(daily).values(Array.from({length:55},(_,i)=>({...template,date:addDays('2026-10-21',-i),number:1000+i}))).run();
+    const first = (await request('/archive')).json;
+    const second = (await request(`/archive?before=${first.nextBefore}`)).json;
+    expect(first.entries).toHaveLength(50); expect(second.entries).toHaveLength(6);
+    expect(second.nextBefore).toBeNull();
+    const dates=[...first.entries,...second.entries].map(entry=>entry.date);
+    expect(new Set(dates).size).toBe(56); expect(dates.every(date=>date<'2026-10-23')).toBe(true);
+  });
   it('has fourteen fixed daily packets and never leaks unopened answers', async () => {
     expect(store.orm.select().from(daily).all()).toHaveLength(14);
     const d = await request('/daily'); expect(d.json.available).toBe(true); expect(d.json.demo).toBe(true);

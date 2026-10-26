@@ -13,31 +13,39 @@ const alice = '444444444444444444', bob = '555555555555555555', botId = '6666666
 let users: string[], authenticatedUser: string;
 let messages: any[], sent: any[], postFailure: number, timeoutAfterSend: boolean, historyFailure: boolean;
 let fetcher: ReturnType<typeof vi.fn>;
+let messageSequence=1555555555555555555n;
 const remote = async (input: string | URL | Request, init?: RequestInit) => {
   const url = new URL(String(input)), path = url.pathname.replace('/api/v10', '');
   const response = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
   if (path === '/oauth2/token') return response({ access_token: 'oauth-token', expires_in: 7200 });
   if (path === '/oauth2/@me') return response({ application: { id: appId }, scopes: ['identify', 'rpc.activities.write'] });
   if (path === '/users/@me') return response({ id: (init?.headers as any)?.Authorization === 'Bearer oauth-token' ? authenticatedUser : botId, username: authenticatedUser === alice ? 'Alice' : 'Bob', avatar: null });
-  if (path.includes('/activity-instances/')) return response({ application_id: appId, instance_id: path.split('/').at(-1), location: { guild_id: guildId }, users });
+  if (path.includes('/activity-instances/')) return response({ application_id: appId, instance_id: path.split('/').at(-1), location: { guild_id: guildId, channel_id:channelId }, users });
   if (path === `/channels/${channelId}`) return response({ guild_id: guildId, type: 0, permission_overwrites: [] });
   if (path.endsWith(`/members/${botId}`)) return response({ roles: [] });
   if (path.endsWith('/roles')) return response([{ id: guildId, permissions: String(1024 + 2048 + 65536) }]);
   if (path.includes('/webhooks/')) return response({});
-  if (path === `/channels/${channelId}/messages`) {
+  if (/^\/channels\/\d+\/messages\/\d+$/.test(path) && init?.method === 'PATCH') {
+    const message=messages.find(item=>item.id===path.split('/').at(-1));
+    if(!message)return response({},404);
+    Object.assign(message,JSON.parse(init.body instanceof FormData ? String(init.body.get('payload_json')) : init.body as string));return response(message);
+  }
+  if (/^\/channels\/\d+\/messages$/.test(path)) {
     if (init?.method === 'POST') {
       if (postFailure) return response({ retry_after: 10 }, postFailure);
-      const body = JSON.parse(init.body as string); sent.push(body);
-      const message = { ...body, id: '1555555555555555555', author: { id: botId } }; messages.unshift(message);
+      const body = JSON.parse(init.body instanceof FormData ? String(init.body.get('payload_json')) : init.body as string); sent.push(body);
+      const message = { ...body, id: String(messageSequence++), channelId:path.split('/')[2], author: { id: botId,bot:true } }; messages.unshift(message);
       if (timeoutAfterSend) { timeoutAfterSend = false; throw new Error('socket closed after accepting'); }
       return response(message);
     }
     if (historyFailure) return response({}, 403);
-    return response(messages);
+    const after=url.searchParams.get('after');
+    return response(messages.filter(message=>(!message.channelId||message.channelId===path.split('/')[2])&&(!after||BigInt(message.id)>BigInt(after))));
   }
   throw new Error(`Unmocked Discord path ${path}`);
 };
 beforeEach(() => {
+  messageSequence=1555555555555555555n;
   store = openDatabase(':memory:'); now = new Date('2026-10-21T17:05:00Z');
   publish(store, compilePackets(store, '2026-10-22', true));
   config = { applicationId: appId, guildId, clientSecret: 'test-secret', publicKey: keys.publicKey.export({ type: 'spki', format: 'der' }).subarray(-32).toString('hex'), botToken: 'test-token', publicOrigin: 'https://nyambung.example' };
@@ -237,5 +245,212 @@ describe('persistent daily scheduler', () => {
     postFailure = 0; now = new Date(now.getTime() + 61000); await bot.tick(); expect(sent).toHaveLength(1);
     store.sqlite.prepare('DELETE FROM discord_deliveries').run(); postFailure = 403; await bot.tick();
     expect(delivery().status).toBe('failed'); expect((await app.request('https://nyambung.example/api/daily')).status).toBe(200);
+  });
+});
+
+describe('channel Activity status, leaderboard and recap', () => {
+  async function startPlayer(user=alice) {
+    const auth=(await login(user)).data;
+    const run=(await api('/runs',auth.sessionToken,{})).data;
+    return {auth,run};
+  }
+  async function heartbeat(auth:any,runId:string) {
+    return api(`/discord/instances/room-one/progress?runId=${runId}`,auth.sessionToken);
+  }
+  async function finish(auth:any,runId:string) {
+    await api(`/runs/${runId}/answers`,auth.sessionToken,{stage:0,word:'restoran'});
+    for(let stage=1;stage<5;stage++)await api(`/runs/${runId}/answers`,auth.sessionToken,{stage,skip:true});
+  }
+  function realDaily(){store.sqlite.exec('UPDATE daily SET demo=0; UPDATE puzzle_versions SET demo=0;');}
+  it('binds presence and run membership to the verified channel and player', async () => {
+    const a=await startPlayer(),b=await startPlayer(bob);
+    expect((await heartbeat(a.auth,b.run.id)).status).toBe(404);
+    expect(store.sqlite.prepare('SELECT * FROM discord_channel_runs').all()).toEqual([]);
+    expect((await api(`/discord/instances/room-one/progress?runId=${a.run.id}&channelId=${bob}`,a.auth.sessionToken)).status).toBe(200);
+    expect(store.sqlite.prepare('SELECT channel_id,run_id FROM discord_activity_players').get()).toEqual({channel_id:channelId,run_id:a.run.id});
+    users=[bob];now=new Date(now.getTime()+6000);
+    expect((await heartbeat(a.auth,a.run.id)).status).toBe(403);
+  });
+  it('posts one status message, edits progress, hides partial scores and expires inactive players', async () => {
+    const a=await startPlayer();realDaily();
+    await heartbeat(a.auth,a.run.id);await Promise.all([bot.reports.tick(),createDiscordBot(store,service,()=>now).reports.tick()]);
+    expect(sent).toHaveLength(1);expect(sent[0].content).toContain('Babak 1/5');
+    const upload=fetcher.mock.calls.find(([,init])=>init?.body instanceof FormData)![1]!.body as FormData;
+    const png=upload.get('files[0]') as File;
+    expect(png.type).toBe('image/png');expect(Buffer.from(await png.arrayBuffer()).subarray(0,8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(sent[0].attachments).toHaveLength(1);expect(sent[0].components[0].components[0]).toMatchObject({label:'Play',custom_id:'nyambung:play'});
+
+    await api(`/runs/${a.run.id}/answers`,a.auth.sessionToken,{stage:0,word:'restoran'});
+    now=new Date(now.getTime()+31000);await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    expect(sent).toHaveLength(1);expect(messages[0].content).toContain('Babak 2/5');
+    expect(messages[0].content).not.toContain('1.000');
+    expect(bot.reports.cardData(channelId,new Date(now.getTime()+7*3600000).toISOString().slice(0,10)).players[0].stageScores).toBeUndefined();
+    for(let stage=1;stage<5;stage++)await api(`/runs/${a.run.id}/answers`,a.auth.sessionToken,{stage,skip:true});
+    now=new Date(now.getTime()+31000);await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    expect(messages[0].content).toContain('Selesai');expect(messages[0].content).toContain('1.000 poin');
+    expect(bot.reports.cardData(channelId,new Date(now.getTime()+7*3600000).toISOString().slice(0,10)).players[0].stageScores).toEqual([1000,0,0,0,0]);
+    expect(messages[0].allowed_mentions).toEqual({parse:[]});
+    expect(JSON.stringify(messages)).not.toMatch(/restoran|makanan|best|connections|sessionToken/);
+    now=new Date(now.getTime()+91000);await bot.reports.tick();
+    expect(messages[0].content).toContain('Sedang main · 0 pemain');
+    expect(messages[0].content).toContain('1.000 poin');
+    expect(bot.reports.cardData(channelId,new Date(now.getTime()+7*3600000).toISOString().slice(0,10)).players[0].stageScores).toEqual([1000,0,0,0,0]);
+    await createDiscordBot(store,service,()=>now).reports.tick();expect(sent).toHaveLength(1);
+  });
+  it('isolates rankings by channel, excludes demo and random runs, and ranks ties equally', async () => {
+    const a=await startPlayer(),b=await startPlayer(bob);
+    await heartbeat(a.auth,a.run.id);await finish(a.auth,a.run.id);
+    expect(bot.reports.leaderboard(channelId)).not.toContain('1.000');
+    realDaily();await heartbeat(b.auth,b.run.id);await finish(b.auth,b.run.id);
+    expect(bot.reports.leaderboard(channelId)).toContain(`1. <@${alice}>`);
+    expect(bot.reports.leaderboard(channelId)).toContain(`1. <@${bob}>`);
+    expect(bot.reports.leaderboard(botId)).not.toContain('1.000');
+    store.sqlite.prepare("UPDATE runs SET mode='random' WHERE id=?").run(a.run.id);
+    expect(bot.reports.leaderboard(channelId)).not.toContain(alice);
+    expect(bot.reports.leaderboard(channelId)).toContain(bob);
+    const response=await interact({channel_id:channelId,member:{permissions:'0',user:{id:alice}},data:{name:'nyambung',options:[{name:'leaderboard'}]}});
+    expect(response.data.type).toBe(4);expect(response.data.data.flags).toBeUndefined();expect(response.data.data.allowed_mentions.parse).toEqual([]);
+  });
+  it('shows server-wide completed scores across channels without leaking answers or other guilds', async () => {
+    const a=await startPlayer(),b=await startPlayer(bob);realDaily();
+    await heartbeat(a.auth,a.run.id);await heartbeat(b.auth,b.run.id);
+    expect((await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken)).status).toBe(403);
+    await finish(a.auth,a.run.id);
+    let response=await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken);
+    expect(response.data.totalPlayers).toBe(1);expect(response.data.players[0]).toMatchObject({id:alice,name:'Alice',score:1000,rank:1});
+    expect(JSON.stringify(response.data)).not.toMatch(/restoran|makanan|best|connections|word|clues|sessionToken|player_id/);
+    expect((await api(`/discord/scores/${a.run.id}`,b.auth.sessionToken)).status).toBe(403);
+    await finish(b.auth,b.run.id);
+    store.sqlite.prepare('UPDATE discord_channel_runs SET channel_id=? WHERE discord_id=?').run(botId,bob);
+    response=await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken);
+    expect(response.data.totalPlayers).toBe(2);expect(response.data.players.map((p:any)=>p.rank)).toEqual([1,1]);
+    store.sqlite.prepare('INSERT INTO discord_channel_runs VALUES (?,?,?,?,?)').run(botId,a.run.id,guildId,alice,now.getTime());
+    expect((await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken)).data.totalPlayers).toBe(2);
+    store.sqlite.prepare('UPDATE discord_channel_runs SET guild_id=? WHERE discord_id=?').run(botId,bob);
+    expect((await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken)).data.totalPlayers).toBe(1);
+    expect((await app.request(`https://nyambung.example/api/discord/scores/${a.run.id}`)).status).toBe(401);
+    users=[bob];now=new Date(now.getTime()+6000);
+    expect((await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken)).status).toBe(403);
+  });
+  it('sends yesterday recap once after 00.05 WIB and freezes results against archive completions', async () => {
+    const a=await startPlayer(),b=await startPlayer(bob);realDaily();
+    await heartbeat(a.auth,a.run.id);await heartbeat(b.auth,b.run.id);await finish(a.auth,a.run.id);
+    now=new Date('2026-10-22T17:04:00Z');await bot.reports.tick();
+    expect(sent.filter(m=>m.content.includes('Recap Daily'))).toHaveLength(0);
+    // Finishing yesterday after midnight must not change its final standings.
+    await finish(b.auth,b.run.id);
+    now=new Date('2026-10-22T17:05:00Z');await bot.reports.tick();
+    const recaps=sent.filter(m=>m.content.includes('Recap Daily'));expect(recaps).toHaveLength(1);
+    expect(recaps[0].content).toContain('2 pemain · 1 selesai · 1 belum selesai');
+    expect(recaps[0].content).toContain(alice);expect(recaps[0].content).not.toContain(bob);
+    now=new Date(now.getTime()+61000);await createDiscordBot(store,service,()=>now).reports.tick();
+    expect(sent.filter(m=>m.content.includes('Recap Daily'))).toHaveLength(1);
+    const response=await interact({channel_id:channelId,data:{name:'nyambung',options:[{name:'recap'}]}});
+    expect(response.data.data.content).toContain('2 pemain · 1 selesai');
+  });
+  it('reconciles ambiguous report sends across restarts and honors rate limits', async () => {
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);
+    timeoutAfterSend=true;await bot.reports.tick();expect(sent).toHaveLength(1);
+    now=new Date(now.getTime()+61000);await createDiscordBot(store,service,()=>now).reports.tick();
+    expect(sent).toHaveLength(1);expect(store.sqlite.prepare("SELECT message_id,uncertain FROM discord_channel_cards WHERE kind='live'").get()).toMatchObject({message_id:messages[0].id,uncertain:0});
+    // Deletion followed by rate limiting must back off without disturbing play.
+    messages=[];now=new Date(now.getTime()+91000);postFailure=429;await bot.reports.tick();
+    const calls=fetcher.mock.calls.length;await bot.reports.tick();expect(fetcher.mock.calls).toHaveLength(calls);
+    postFailure=0;now=new Date(now.getTime()+61000);await bot.reports.tick();expect(sent).toHaveLength(2);
+    expect((await api('/daily',a.auth.sessionToken)).status).toBe(200);
+  });
+  it('reuses the same channel card after midnight and across repeated launches', async () => {
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    const messageId=messages[0].id;
+    for(let launch=0;launch<3;launch++)expect((await interact()).data).toEqual({type:12});
+    now=new Date('2026-10-25T17:05:00Z');await bot.reports.tick();
+    expect(sent).toHaveLength(1);expect(messages[0].id).toBe(messageId);
+    expect(messages[0].content).toContain('Sedang main · 0 pemain');
+    expect(store.sqlite.prepare('SELECT date,message_id FROM discord_channel_cards').get()).toEqual({date:'2026-10-26',message_id:messageId});
+    expect(messages[0].components[0].components[0]).toMatchObject({label:'Play',custom_id:'nyambung:play'});
+    expect((await interact({type:3,data:{custom_id:'nyambung:play'}})).data).toEqual({type:12});
+    expect((await interact({data:{name:'launch',type:4}})).data).toEqual({type:12});
+    await bot.reports.tick();expect(sent).toHaveLength(1);
+  });
+  it('resurfaces a buried card for a new player, with a cooldown and exact-revision retry',async()=>{
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    const first=messages[0].id;
+    const addChat=(count:number)=>{for(let n=0;n<count;n++)messages.unshift({id:String(messageSequence++),channelId:channelId,content:'chat',author:{id:bob,bot:false}});};
+    addChat(8);
+    // A progress update does not bump the card, even in a busy channel.
+    now=new Date(now.getTime()+610000);await heartbeat(a.auth,a.run.id);await bot.reports.tick();expect(sent).toHaveLength(1);
+    const b=await startPlayer(bob);await heartbeat(b.auth,b.run.id);now=new Date(now.getTime()+31000);
+    timeoutAfterSend=true;await bot.reports.tick();expect(sent).toHaveLength(2);
+    const pending=store.sqlite.prepare('SELECT revision,message_id,uncertain FROM discord_channel_cards').get();
+    expect(pending).toEqual({revision:1,message_id:null,uncertain:1});
+    now=new Date(now.getTime()+61000);await createDiscordBot(store,service,()=>now).reports.tick();
+    const recovered=store.sqlite.prepare('SELECT revision,message_id,uncertain FROM discord_channel_cards').get() as any;
+    expect(recovered.revision).toBe(1);expect(recovered.message_id).not.toBe(first);expect(recovered.uncertain).toBe(0);expect(sent).toHaveLength(2);
+    // A rejoining player and eight new chats inside the cooldown only edit.
+    store.sqlite.prepare('DELETE FROM discord_activity_players WHERE discord_id=?').run(alice);
+    now=new Date(now.getTime()+91000);await heartbeat(b.auth,b.run.id);await bot.reports.tick();
+    addChat(8);await heartbeat(a.auth,a.run.id);now=new Date(now.getTime()+31000);await bot.reports.tick();expect(sent).toHaveLength(2);
+  });
+  it('keeps a recent or unburied card in place when players join',async()=>{
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    now=new Date(now.getTime()+610000);const b=await startPlayer(bob);await heartbeat(b.auth,b.run.id);await bot.reports.tick();
+    expect(sent).toHaveLength(1);expect(store.sqlite.prepare('SELECT revision FROM discord_channel_cards').get()).toEqual({revision:0});
+  });
+  it('does not resend an uncertain report when history permission is lost', async () => {
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);timeoutAfterSend=true;await bot.reports.tick();
+    now=new Date(now.getTime()+61000);historyFailure=true;await createDiscordBot(store,service,()=>now).reports.tick();
+    expect(sent).toHaveLength(1);expect(store.sqlite.prepare("SELECT uncertain,last_error FROM discord_channel_cards WHERE kind='live'").get()).toMatchObject({uncertain:1,last_error:'Discord HTTP 403'});
+  });
+});
+
+describe('multiple allowed Discord servers',()=>{
+  const friendGuild='777777777777777777',friendChannel='888888888888888888';
+  function allowFriend(){
+    config.guildIds=[guildId,friendGuild];
+    fetcher.mockImplementation(async(input,init)=>{
+      const path=new URL(String(input)).pathname.replace('/api/v10','');
+      if(path.includes('/activity-instances/friend-room'))return Response.json({application_id:appId,instance_id:'friend-room',location:{guild_id:friendGuild,channel_id:friendChannel},users});
+      if(path===`/channels/${friendChannel}`)return Response.json({guild_id:friendGuild,type:0,permission_overwrites:[]});
+      if(path===`/guilds/${friendGuild}/roles`)return Response.json([{id:friendGuild,permissions:String(1024+2048+65536)}]);
+      return remote(input,init);
+    });
+    bot=createDiscordBot(store,service,()=>now);app=createApp(store,()=>now,{discord:service,bot});
+  }
+  async function play(user:string,room:string){
+    const auth=(await login(user,room)).data;expect(auth.sessionToken).toBeTruthy();
+    const run=(await api('/runs',auth.sessionToken,{})).data;
+    expect((await api(`/discord/instances/${room}/progress?runId=${run.id}`,auth.sessionToken)).status).toBe(200);
+    for(let stage=0;stage<5;stage++)await api(`/runs/${run.id}/answers`,auth.sessionToken,{stage,skip:true});
+    return {auth,run};
+  }
+  it('accepts both servers and isolates presence, result scores, channel posts and recap',async()=>{
+    allowFriend();
+    const a=await play(alice,'room-one'),b=await play(bob,'friend-room');
+    store.sqlite.exec('UPDATE daily SET demo=0;UPDATE puzzle_versions SET demo=0;');
+    expect(store.sqlite.prepare('SELECT guild_id,channel_id FROM discord_activity_players ORDER BY guild_id').all()).toEqual([{guild_id:guildId,channel_id:channelId},{guild_id:friendGuild,channel_id:friendChannel}]);
+    const aScores=await api(`/discord/scores/${a.run.id}`,a.auth.sessionToken),bScores=await api(`/discord/scores/${b.run.id}`,b.auth.sessionToken);
+    expect(aScores.data.players.map((p:any)=>p.id)).toEqual([alice]);expect(bScores.data.players.map((p:any)=>p.id)).toEqual([bob]);
+    expect((await api('/discord/instances/friend-room/progress',a.auth.sessionToken)).status).toBe(403);
+    expect((await interact({guild_id:friendGuild})).data).toEqual({type:12});
+    const ranks=await interact({guild_id:friendGuild,channel_id:friendChannel,data:{name:'nyambung',options:[{name:'leaderboard'}]}});
+    expect(ranks.data.data.content).toContain(bob);expect(ranks.data.data.content).not.toContain(alice);
+    await bot.reports.tick();
+    expect(messages.find(m=>m.channelId===channelId).content).toContain(alice);expect(messages.find(m=>m.channelId===channelId).content).not.toContain(bob);
+    expect(messages.find(m=>m.channelId===friendChannel).content).toContain(bob);expect(messages.find(m=>m.channelId===friendChannel).content).not.toContain(alice);
+    now=new Date('2026-10-22T17:05:00Z');await bot.reports.tick();
+    const recaps=messages.filter(m=>m.content.includes('Recap Daily'));expect(recaps).toHaveLength(2);
+    expect(recaps.find(m=>m.channelId===channelId).content).not.toContain(bob);expect(recaps.find(m=>m.channelId===friendChannel).content).not.toContain(alice);
+  });
+  it('configures and schedules reminders separately, rejecting channels from another server',async()=>{
+    allowFriend();enableReminder();semanticDaily();
+    await interact({guild_id:friendGuild,...reminderCommand('atur',friendChannel)});await bot.drain();
+    expect(store.sqlite.prepare('SELECT guild_id,channel_id FROM discord_reminders ORDER BY guild_id').all()).toEqual([{guild_id:guildId,channel_id:channelId},{guild_id:friendGuild,channel_id:friendChannel}]);
+    await interact(reminderCommand('atur',friendChannel));await bot.drain();
+    expect(store.sqlite.prepare('SELECT channel_id FROM discord_reminders WHERE guild_id=?').get(guildId)).toEqual({channel_id:channelId});
+    await bot.tick();expect(messages).toHaveLength(2);expect(new Set(messages.map(m=>m.channelId))).toEqual(new Set([channelId,friendChannel]));
+    await interact({guild_id:friendGuild,...reminderCommand('matikan')});
+    expect(store.sqlite.prepare('SELECT enabled FROM discord_reminders WHERE guild_id=?').get(friendGuild)).toEqual({enabled:0});
+    expect(store.sqlite.prepare('SELECT enabled FROM discord_reminders WHERE guild_id=?').get(guildId)).toEqual({enabled:1});
+    expect((await interact({guild_id:botId})).data.data.content).toContain('beta');
   });
 });

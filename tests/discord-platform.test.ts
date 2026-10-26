@@ -36,6 +36,19 @@ describe('Discord platform bootstrap', () => {
     const { platform } = await import('../apps/web/src/platform');
     expect(platform.kind).toBe('discord'); await platform.bootstrap(); expect(platform.userId).toBe('alice');
   });
+  it('recognizes top-level Discord mobile WebViews without a parent iframe',async()=>{
+    const window:any={};window.parent=window;vi.stubGlobal('window',window);
+    vi.stubGlobal('location',{search:'?frame_id=frame&instance_id=room-one&platform=mobile',pathname:'/.proxy/',hostname:'nyambung.web.id'});
+    const {platform}=await import('../apps/web/src/platform');expect(platform.kind).toBe('discord');
+    await platform.bootstrap();expect(platform.userId).toBe('alice');
+  });
+  it('opens the game when optional participant subscription is never acknowledged on mobile',async()=>{
+    sdk.subscribe.mockImplementation(()=>new Promise(()=>{}));
+    const {platform}=await import('../apps/web/src/platform');
+    await platform.bootstrap();expect(platform.userId).toBe('alice');
+    const {api}=await import('../apps/web/src/api');await api('/daily');
+    expect(fetcher.mock.calls.at(-1)?.[1].headers.Authorization).toBe('Bearer session-1');
+  });
   it('runs SDK authorization once for concurrent bootstraps and sends no guest cookie', async () => {
     const { platform } = await import('../apps/web/src/platform');
     await Promise.all([platform.bootstrap(), platform.bootstrap()]);
@@ -66,15 +79,30 @@ describe('Discord platform bootstrap', () => {
     await expect(platform.bootstrap()).rejects.toThrow('Identitas Discord');
     expect(platform.userId).toBeUndefined();
   });
-  it('keeps presence spoiler-free and uses Discord share and invitation dialogs', async () => {
+  it('keeps presence spoiler-free and shares PNG files while retaining Discord invitations', async () => {
     const { platform } = await import('../apps/web/src/platform'); await platform.bootstrap();
     await platform.updatePresence!({ mode: 'daily', number: 1, completed: false, results: [{ word: 'secret-answer' }], total: 1000 } as any);
     expect(sdk.setActivity.mock.calls[0][0].activity).toMatchObject({ details: 'Daily #001', state: 'Babak 2/5' });
     expect(JSON.stringify(sdk.setActivity.mock.calls)).not.toContain('secret-answer');
-    expect(await platform.share('Nyambung #001 · 4000/5000')).toBe('shared');
+    const share = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('navigator',{canShare:vi.fn().mockReturnValue(true),share});
+    const file = new File(['png'],'nyambung.png',{type:'image/png'});
+    expect(await platform.share(file)).toBe('shared');
+    expect(share).toHaveBeenCalledWith({files:[file],title:'Hasil Nyambung'});
+    expect(sdk.shareLink).not.toHaveBeenCalled();
     await platform.invite!(); expect(sdk.openInviteDialog).toHaveBeenCalledOnce();
     sdk.getChannelPermissions.mockResolvedValueOnce({ permissions: '0' });
     await expect(platform.invite!()).rejects.toThrow('izin');
+  });
+  it('tracks PiP, grid and focused layout events without leaking listeners',async()=>{
+    const {platform}=await import('../apps/web/src/platform');await platform.bootstrap();
+    const listener=vi.fn();const remove=platform.onLayoutChanged!(listener);
+    const notify=sdk.subscribe.mock.calls.find(([event])=>event==='ACTIVITY_LAYOUT_MODE_UPDATE')![1];
+    expect(listener).toHaveBeenLastCalledWith('focused');
+    notify({layout_mode:1});expect(platform.layoutMode).toBe('pip');expect(listener).toHaveBeenLastCalledWith('pip');
+    notify({layout_mode:2});expect(listener).toHaveBeenLastCalledWith('grid');
+    notify({layout_mode:-1});expect(platform.layoutMode).toBe('grid');
+    remove();const calls=listener.mock.calls.length;notify({layout_mode:0});expect(platform.layoutMode).toBe('focused');expect(listener).toHaveBeenCalledTimes(calls);
   });
   it('supports participant listeners while optional client features fail gracefully', async () => {
     sdk.subscribe.mockRejectedValueOnce(new Error('old client'));
@@ -82,7 +110,7 @@ describe('Discord platform bootstrap', () => {
     const listener = vi.fn(); const remove = platform.onParticipantsChanged!(listener);
     // Successful reauthorization retries subscribing on an older client.
     await (platform as any).bootstrap(true);
-    const notify = sdk.subscribe.mock.calls.at(-1)![1]; notify(); expect(listener).toHaveBeenCalledOnce();
+    const notify = sdk.subscribe.mock.calls.filter(([event])=>event==='ACTIVITY_INSTANCE_PARTICIPANTS_UPDATE').at(-1)![1]; notify(); expect(listener).toHaveBeenCalledOnce();
     remove(); notify(); expect(listener).toHaveBeenCalledOnce();
     sdk.setActivity.mockRejectedValueOnce(new Error('scope denied'));
     await expect(platform.updatePresence!(null)).resolves.toBeUndefined();

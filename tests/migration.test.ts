@@ -67,3 +67,47 @@ it('repairs an already-applied v3 database missing stage_order without losing pr
     expect(game(store, clock).view(before.id, player).total).toBe(1000);
   } finally { if (store.sqlite.open) store.sqlite.close(); rmSync(temp, { recursive:true, force:true }); }
 });
+
+it('repairs a v5 database missing Discord interaction cache while preserving identities and progress', () => {
+  const temp = mkdtempSync(join(tmpdir(), 'nyambung-v5-repair-'));
+  const path = join(temp, 'existing.sqlite');
+  let store = openDatabase(path);
+  try {
+    const service = game(store, () => new Date('2026-10-22T12:00:00Z'));
+    const player = service.createPlayer();
+    store.sqlite.prepare('INSERT INTO discord_identities VALUES (?,?,?,?,?)').run('123456789', player, 'Hafizh', 'avatar-hash', 1);
+    store.sqlite.prepare('INSERT INTO discord_sessions VALUES (?,?,?,?)').run('session-hash', '123456789', 'room-one', 9999999999999);
+    const packet = compilePackets(store, '2026-10-22', true)[0];
+    store.sqlite.prepare('INSERT INTO daily VALUES (?,?,?,?,?)').run(packet.date, packet.number, 1, packet.snapshot, packet.publishedAt);
+    const run = service.start(player);
+    service.submit(run.id, player, { stage:0, word:'restoran' });
+    store.sqlite.exec('DROP TABLE discord_interactions; DELETE FROM migrations WHERE version = 6;');
+    store.sqlite.close();
+    store = openDatabase(path);
+    expect(store.sqlite.prepare('SELECT version FROM migrations WHERE version = 6').get()).toEqual({ version:6 });
+    store.sqlite.prepare('INSERT INTO discord_interactions VALUES (?,?,?)').run('interaction-one', '{"type":12}', 9999999999999);
+    expect(store.sqlite.prepare('SELECT name,avatar FROM discord_identities WHERE discord_id=?').get('123456789')).toEqual({ name:'Hafizh', avatar:'avatar-hash' });
+    expect(store.sqlite.prepare('SELECT instance_id FROM discord_sessions WHERE token_hash=?').get('session-hash')).toEqual({ instance_id:'room-one' });
+    expect(game(store).view(run.id, player).total).toBe(1000);
+    expect(store.sqlite.pragma('foreign_key_check')).toEqual([]);
+    store.sqlite.close(); store = openDatabase(path);
+    expect(store.sqlite.prepare('SELECT reply FROM discord_interactions WHERE id=?').get('interaction-one')).toEqual({ reply:'{"type":12}' });
+    expect(game(store).view(run.id, player).total).toBe(1000);
+  } finally { if (store.sqlite.open) store.sqlite.close(); rmSync(temp, { recursive:true, force:true }); }
+});
+
+it('reuses the latest existing live message when migrating to one card per channel',()=>{
+  const temp=mkdtempSync(join(tmpdir(),'nyambung-card-migration-'));const path=join(temp,'existing.sqlite');
+  let store=openDatabase(path);
+  try{
+    store.sqlite.exec('DROP TABLE discord_channel_cards;DELETE FROM migrations WHERE version>=8;');
+    const insert=store.sqlite.prepare("INSERT INTO discord_channel_reports(channel_id,date,kind,guild_id,message_id,uncertain) VALUES (?,?,'live',?,?,?)");
+    insert.run('channel-one','2026-10-23','guild-one','older-message',0);
+    insert.run('channel-one','2026-10-24','guild-one','latest-message',0);
+    insert.run('channel-two','2026-10-24','guild-two',null,1);
+    store.sqlite.close();store=openDatabase(path);
+    expect(store.sqlite.prepare('SELECT channel_id,message_id,uncertain FROM discord_channel_cards ORDER BY channel_id').all()).toEqual([{channel_id:'channel-one',message_id:'latest-message',uncertain:0},{channel_id:'channel-two',message_id:null,uncertain:1}]);
+    store.sqlite.close();store=openDatabase(path);
+    expect(store.sqlite.prepare('SELECT count(*) AS n FROM discord_channel_cards').get()).toEqual({n:2});
+  }finally{if(store.sqlite.open)store.sqlite.close();rmSync(temp,{recursive:true,force:true});}
+});

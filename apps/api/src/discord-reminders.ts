@@ -1,16 +1,19 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './db.js';
-import { DiscordHttpError, type DiscordService } from './discord.js';
+import { DiscordHttpError, discordGuildIds, type DiscordService } from './discord.js';
 import { wibDate } from './time.js';
+import { createDiscordReports } from './discord-reports.js';
 
 const id = z.string().regex(/^\d{5,24}$/);
 const option: z.ZodType<CommandOption> = z.lazy(() => z.object({ name: z.string(), value: z.union([z.string(), z.number()]).optional(), options: z.array(option).optional() }));
 interface CommandOption { name: string; value?: string | number; options?: CommandOption[] }
-const interaction = z.object({ id, application_id: id, type: z.number(), token: z.string().optional(), guild_id: id.optional(), member: z.object({ permissions: z.string().optional(), user: z.object({ id }) }).optional(), data: z.object({ name: z.string().optional(), custom_id: z.string().optional(), options: z.array(option).optional() }).optional() });
+const interaction = z.object({ id, application_id: id, type: z.number(), token: z.string().optional(), guild_id: id.optional(), channel_id: id.optional(), member: z.object({ permissions: z.string().optional(), user: z.object({ id }) }).optional(), data: z.object({ name: z.string().optional(), type:z.number().optional(), custom_id: z.string().optional(), options: z.array(option).optional() }).optional() });
 const reply = (content: string) => ({ type: 4, data: { content, flags: 64, allowed_mentions: { parse: [] } } });
 export const discordCommands = [{ name: 'nyambung', description: 'Main Nyambung dan atur pengingat daily', type: 1, options: [
   { name: 'main', description: 'Buka Nyambung', type: 1 },
+  { name: 'leaderboard', description: 'Skor Daily yang sudah selesai di channel ini', type: 1 },
+  { name: 'recap', description: 'Recap Daily kemarin di channel ini', type: 1 },
   { name: 'pengingat', description: 'Pengingat daily untuk server ini (Manage Server)', type: 2, options: [
     { name: 'atur', description: 'Kirim daily pukul 00.05 WIB', type: 1, options: [{ name: 'channel', description: 'Channel untuk pengingat', type: 7, required: true, channel_types: [0, 5] }] },
     { name: 'status', description: 'Lihat pengaturan pengingat', type: 1 },
@@ -25,7 +28,19 @@ interface Reminder { guild_id: string; channel_id: string; enabled: number; last
 interface Delivery { guild_id: string; date: string; channel_id: string; status: string; attempts: number }
 interface Message { id: string; author: { id: string }; components?: { components?: { custom_id?: string }[] }[] }
 export function createDiscordBot(store: Store, discord: DiscordService, clock: () => Date = () => new Date()) {
+  const bots=new Map(discordGuildIds(discord.config).map(guildId=>[guildId,createGuildDiscordBot(store,{...discord,config:{...discord.config,guildId,guildIds:[guildId]}},clock)]));
+  const first=bots.values().next().value!;
+  return {
+    handle:(input:unknown)=>{const parsed=interaction.safeParse(input);return (parsed.success&&parsed.data.guild_id?bots.get(parsed.data.guild_id)??first:first).handle(input);},
+    tick:async()=>{await Promise.all([...bots.values()].map(bot=>bot.tick()));},
+    reports:{...first.reports,tick:async()=>{await Promise.all([...bots.values()].map(bot=>bot.reports.tick()));}},
+    start:()=>{const stops=[...bots.values()].map(bot=>bot.start());return async()=>{await Promise.all(stops.map(stop=>stop()));};},
+    drain:async()=>{await Promise.all([...bots.values()].map(bot=>bot.drain()));},
+  };
+}
+function createGuildDiscordBot(store: Store, discord: DiscordService, clock: () => Date) {
   const { client, config } = discord;
+  const reports = createDiscordReports(store, discord, clock);
   const tasks = new Set<Promise<void>>();
   let ticking = false;
   const botId = () => client.request<{ id: string }>('/users/@me');
@@ -66,9 +81,11 @@ export function createDiscordBot(store: Store, discord: DiscordService, clock: (
     const action = group?.options?.[0];
     let response: object;
     let work: (() => Promise<void>) | undefined;
-    if (data.type === 3 && /^nyambung:daily(?:-test)?:\d{4}-\d{2}-\d{2}$/.test(data.data?.custom_id || '')) response = { type: 12 };
+    if (data.type === 3 && (data.data?.custom_id==='nyambung:play' || /^nyambung:daily(?:-test)?:\d{4}-\d{2}-\d{2}$/.test(data.data?.custom_id || ''))) response = { type: 12 };
+    else if (data.type===2 && data.data?.type===4) response={type:12};
     else if (data.type !== 2 || data.data?.name !== 'nyambung') response = reply('Perintah tidak dikenal.');
     else if (group?.name === 'main') response = { type: 12 };
+    else if ((group?.name === 'leaderboard' || group?.name === 'recap') && data.channel_id) response = { type: 4, data: { content: group.name === 'leaderboard' ? reports.leaderboard(data.channel_id) : reports.recap(data.channel_id), allowed_mentions: { parse: [] } } };
     else if (group?.name !== 'pengingat') response = reply('Perintah tidak dikenal.');
     else if (!/^\d+$/.test(data.member?.permissions || '') || !(BigInt(data.member!.permissions!) & (32n | 8n))) response = reply('Kamu membutuhkan izin Manage Server.');
     else {
@@ -162,9 +179,9 @@ export function createDiscordBot(store: Store, discord: DiscordService, clock: (
     } finally { ticking = false; }
   }
   function start() {
-    const run = () => defer(tick);
+    const run = () => defer(async () => { await tick(); await reports.tick(); });
     run(); const timer = setInterval(run, 30000); timer.unref();
     return async () => { clearInterval(timer); await Promise.allSettled([...tasks]); };
   }
-  return { handle, tick, start, drain: async () => { await Promise.allSettled([...tasks]); } };
+  return { handle, tick, start, reports, drain: async () => { await Promise.allSettled([...tasks]); } };
 }

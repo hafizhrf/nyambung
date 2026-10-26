@@ -3,15 +3,15 @@ import {sameWordFamily} from './word-family.js';
 import {evaluateClosest} from './vector-index.js';
 import { trainDifficulty, type Observation } from './adaptive.js';
 import { roundFeatures, type Exposure } from './retrieval.js';
-import { and, eq, asc, desc, isNull } from 'drizzle-orm';
+import { and, eq, asc, desc, isNull, lt } from 'drizzle-orm';
 import { randomUUID, randomInt } from 'node:crypto';
-import { normalizeWord, type RunView, type StageResult, type Stats, type DailyComparison } from '@nyambung/shared';
+import { normalizeWord, type RunView, type StageResult, type Stats, type DailyComparison, type ArchiveView } from '@nyambung/shared';
 import { answers, daily, players, runs, puzzleVersions, randomPool } from './schema.js';
 import type { Store } from './db.js';
 import { createHash } from 'node:crypto';
 import { evaluateRound, selectRounds, combinationKey, type GeneratedSelection, type GeneratedRound } from './random-generator.js';
 import type { Snapshot, PublishedStage } from './scoring.js';
-import { addDays, wibDate } from './time.js';
+import { addDays, isPuzzleDate, wibDate } from './time.js';
 export class GameError extends Error { constructor(message: string, public status: 400 | 404 | 409 = 400) { super(message); } }
 export function game(store: Store, clock: () => Date = () => new Date()) {
   const db = store.orm;
@@ -71,11 +71,28 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     const stage = index < 5 ? stageFor(run,index) : null;
     return { mode: run.mode, id, date: run.date, number: puzzle?.number ?? 0, demo: version.demo, completed: index === 5, total: results.reduce((sum, r) => sum + r.score, 0), results, current: stage ? { index, kind: stage.kind, clues: stage.clues } : null };
   }
-  function start(playerId: string) {
+  function archive(playerId: string, before?: string): ArchiveView {
+    const today = wibDate(clock());
+    if (before !== undefined && !isPuzzleDate(before)) throw new GameError('Tanggal tidak valid.');
+    const cutoff = before && before < today ? before : today;
+    const rows = db.select({ date:daily.date, number:daily.number, demo:daily.demo, runId:runs.id, completedAt:runs.completedAt, runDemo:puzzleVersions.demo })
+      .from(daily)
+      .leftJoin(runs, and(eq(runs.date,daily.date), eq(runs.playerId,playerId), eq(runs.mode,'daily'), isNull(runs.supersededAt)))
+      .leftJoin(puzzleVersions, eq(puzzleVersions.id,runs.versionId))
+      .where(lt(daily.date,cutoff)).orderBy(desc(daily.date)).limit(51).all();
+    return {
+      today,
+      entries:rows.slice(0,50).map(row => ({ date:row.date, number:row.number, demo:row.demo,
+        status:!row.runId || row.runDemo !== row.demo ? 'new' : row.completedAt ? 'completed' : 'in_progress' })),
+      nextBefore:rows.length > 50 ? rows[49].date : null,
+    };
+  }
+  function start(playerId: string, date = wibDate(clock())) {
+    if (!isPuzzleDate(date)) throw new GameError('Tanggal tidak valid.');
+    if (date > wibDate(clock())) throw new GameError('Daily tanggal ini belum tersedia.', 404);
     return db.transaction(tx => {
-      const date = wibDate(clock());
       const puzzle = tx.select().from(daily).where(eq(daily.date, date)).get();
-      if (!puzzle) throw new GameError('Puzzle hari ini belum tersedia.', 404);
+      if (!puzzle) throw new GameError(date === wibDate(clock()) ? 'Puzzle hari ini belum tersedia.' : 'Daily tanggal ini tidak tersedia.', 404);
       let run = tx.select().from(runs).where(and(eq(runs.playerId, playerId), eq(runs.date, date), eq(runs.mode, 'daily'), isNull(runs.supersededAt))).get();
       if (run && !puzzle.demo) {
         const previous = tx.select({ demo: puzzleVersions.demo }).from(puzzleVersions).where(eq(puzzleVersions.id, run.versionId!)).get();
@@ -223,5 +240,5 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     };
   }
   function createPlayer(id = randomUUID()) { db.insert(players).values({ id, createdAt: clock().toISOString() }).onConflictDoNothing().run(); return id; }
-  return { view, start, startRandom, randomStatus, comparison, submit, stats, createPlayer };
+  return { view, start, archive, startRandom, randomStatus, comparison, submit, stats, createPlayer };
 }

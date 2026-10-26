@@ -69,7 +69,8 @@ Referensi API: https://docs.jina.ai/ dan https://jina.ai/embeddings/. Harga/kuot
 | API | Perilaku |
 | --- | --- |
 | `GET /api/daily` | Tanggal WIB, waktu server/reset, ketersediaan dan progres hari ini |
-| `POST /api/runs` | Membuat/melanjutkan run hari ini |
+| `GET /api/archive` | Daily terbitan sebelum hari ini beserta status progres sendiri; cursor `?before=YYYY-MM-DD` |
+| `POST /api/runs` | Membuat/melanjutkan run hari ini; `{date:"YYYY-MM-DD"}` untuk Daily lama yang sudah terbit |
 | `GET /api/runs/:id` | Progres milik pemain, hasil terbuka, satu prompt aktif |
 | `POST /api/runs/:id/answers` | `{stage: 0..4, word?: string, skip?: boolean}`; hasil run terbaru |
 | `GET /api/me/stats` | Selesai, streak, terbaik, rata-rata |
@@ -86,6 +87,8 @@ npm run test:e2e
 ```
 
 Vitest menguji scoring, batas WIB, validasi, dua identitas, retry, urutan stage, snapshot/publikasi atomik dan streak. Playwright menjalankan alur lima stage, draft/resume, dua tab, skip dan share tanpa spoiler pada desktop dan mobile reduced motion, memakai server dan database memori terpisah.
+
+**Bagikan hasil** membuka pratinjau kartu PNG 1080 × 1350 berisi skor total, skor per babak, tanggal, dan mode. Petunjuk, tebakan, dan jawaban terbaik tidak dimasukkan ke gambar. **Bagikan gambar** memakai file PNG melalui Web Share API bila didukung, dan mengunduh PNG sebagai fallback. **Unduh gambar** selalu tersedia. Gambar dibuat di browser; hasil tidak diunggah ke layanan gambar. Bagian biru pada gelombang hasil mengikuti proporsi poin, dengan sisa garis abu-abu.
 
 ## Produksi dan backup
 
@@ -109,7 +112,7 @@ Jadwalkan setiap hari, misalnya cron dengan **path absolut** ke node, checkout, 
 0 2 * * * cd /srv/nyambung && DATABASE_PATH=/srv/nyambung/data/production.sqlite /usr/bin/node --import tsx scripts/backup.ts >> /srv/nyambung/backups/backup.log 2>&1
 ```
 
-Simpan salinan backup di media terpisah dan tentukan retensi sesuai kebutuhan. Untuk restore, hentikan layanan, pindahkan file database beserta `-wal`/`-shm` lama ke lokasi cadangan, lalu salin backup konsisten ke path database dan jalankan lagi. Jangan menyalin file database aktif secara manual. Periksa `PRAGMA integrity_check` dan jumlah paket/run setelah restore. Pantau error HTTP, disk/backup harian, dan stok tanggal daily; perintah CLI keluar nonzero saat gagal.
+Perintah backup menghasilkan `.sqlite.gz` dan menyisakan satu backup Nyambung terbaru setelah file baru selesai dibuat. Backup lama tetap ada jika backup atau kompresi gagal. File sementara dan file lain tidak ikut retensi. Untuk restore, dekompresi `.sqlite.gz` menjadi `.sqlite` terlebih dahulu. Simpan salinan terpisah jika memerlukan arsip jangka panjang. Untuk restore, hentikan layanan, pindahkan file database beserta `-wal`/`-shm` lama ke lokasi cadangan, lalu salin backup konsisten ke path database dan jalankan lagi. Jangan menyalin file database aktif secara manual. Periksa `PRAGMA integrity_check` dan jumlah paket/run setelah restore. Pantau error HTTP, disk/backup harian, dan stok tanggal daily; perintah CLI keluar nonzero saat gagal.
 
 ## Discord berikutnya
 
@@ -117,7 +120,13 @@ Simpan salinan backup di media terpisah dan tentukan retensi sesuai kebutuhan. U
 
 Audio antarmuka memakai enam efek dari **Kenney UI SFX Set** (CC0), dikonversi ke WAV mono untuk browser desktop dan mobile. Aset dan lisensi aslinya ada di `apps/web/public/audio/kenney/`. Suara baru diaktifkan setelah interaksi pemain; toggle **Suara** menyimpan pilihan di browser. Audio yang gagal dimuat tidak menghalangi permainan.
 
+Beranda selalu menampilkan Daily. Tombol **Random Play** berwarna hijau di bawah tombol Main langsung membuka mode acak; bila ada sesi acak yang belum selesai, tombolnya menjadi **Lanjutkan Random Play**. Kembali ke beranda atau refresh menampilkan Daily lagi, sementara progres kedua mode tetap tersimpan secara terpisah.
+
+Tombol **Arsip Daily** di sebelah tanggal membuka Daily yang sudah lewat, dengan status Main, Lanjutkan, atau Lihat hasil. Progres dan hasil tersimpan per tanggal pada identitas pemain yang sama. Memainkan arsip tidak mengganti progres hari ini; statistik tetap menghitung tanggal puzzle. Arsip hanya memuat tanggal yang sudah diterbitkan sebelum hari ini dalam WIB, dan API menolak tanggal mendatang. Daftar dipaginasi 50 tanggal tanpa mengirim petunjuk atau jawaban.
+
 Mode **Acak** menggunakan bank soal terpisah dari daily terjadwal: tiga jembatan dua kata dan satu jembatan tiga kata dibentuk server dari hub kurasi dan relasi leksikal Wordnet Bahasa saat permainan dimulai. Babak kedekatan makna tetap dipilih dari pasangan sinonim yang direview. Sesi yang belum selesai dilanjutkan; setelah selesai, **Main lagi** membuat sesi baru. Urutan soal dan versi skor tersimpan, sehingga refresh dan pembaruan bank tidak mengubah permainan yang sedang berjalan. Mode ini tetap tersedia ketika daily tanggal aktif belum diterbitkan dan tidak dihitung dalam streak/statistik daily.
+
+Kandidat hubungan tambahan ada di `content/relations-extra.ts`, mencakup makna ganda, idiom, benda, kegiatan, dan konsep sehari-hari. Kompilasi Wordnet mempertahankan setiap sense yang lolos filter untuk satu kata; petunjuk dari sense berbeda tidak dicampur. Perubahan sumber baru berlaku untuk sesi baru setelah preview dan publikasi bank, dengan embedding tersimpan melalui `--reuse-published`.
 
 Siapkan bank acak dengan `npm run content -- preview-random`, review `data/random-review.json`, lalu jalankan `npm run content -- publish-random --approve HASH`. Edisi v4 memakai 85.308 kata yang bisa ditebak, 178 hub editorial ditambah lebih dari seribu hub leksikal yang lolos filter, serta sekitar enam ribu clue kedekatan makna. Hub tambahan berasal dari Wordnet Bahasa yang dipadankan dengan relasi Princeton WordNet 3.0. Hanya sinonim, hipernim langsung, bagian/keanggotaan, serta turunan konsep langsung dalam sense yang sama yang digunakan; hubungan saudara yang hanya berbagi kategori tidak cukup sebagai bukti. Hub leksikal disaring secara otomatis, bukan diklaim semuanya telah direview manusia. Clue yang terlalu umum, regional bermasalah, dan kata yang hanya berbeda bentuk karakter disaring. Source/sense disimpan di setiap hub. Lisensi dan langkah impor ada di `content/LEXICON-LICENSE.md`.
 

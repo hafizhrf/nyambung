@@ -1,4 +1,5 @@
 import type { ReviewedBridge } from '../apps/api/src/random-generator.js';
+import { extraBridges } from './relations-extra.js';
 // Each row is an answer with independently meaningful associations. A round
 // draws clues from different facets, never from unrelated embedding neighbours.
 // Add an edge only when its connection can be explained in everyday Indonesian.
@@ -268,7 +269,7 @@ const crossContextBridges:ReviewedBridge[] = [
 ];
 // Keep all independently reviewed facets when an answer appears in several rows.
 const mergedBridges=new Map<string,ReviewedBridge>();
-for(const relation of [...originalBridges,...additionalBridges,...crossContextBridges]) {
+for(const relation of [...originalBridges,...additionalBridges,...crossContextBridges,...extraBridges]) {
   const previous=mergedBridges.get(relation.answer);
   const facets=[...(previous?.facets??[]),...relation.facets];
   const unique=[...new Map(facets.map(group=>[[...group].sort().join('|'),group])).values()];

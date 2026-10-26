@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 async function expectCenteredModal(page: Page) {
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
@@ -47,6 +48,9 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   }
   await expect(page.getByRole('heading', { name: 'Hasil daily' })).toBeVisible();
   await expect(page.locator('.grand-score')).toContainText('5.000');
+  const resultWaves = await page.locator('.result-wave-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')));
+  expect(new Set(resultWaves).size).toBe(5);
+  await expect(page.locator('.result-wave-progress')).toHaveCount(5);
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.reveal')).every(el => Number(getComputedStyle(el).opacity) >= .999 && getComputedStyle(el).transform === 'none'));
   await page.screenshot({ path: `test-results/${testInfo.project.name}-results.png`, fullPage: true });
   await page.getByRole('button', { name: 'Statistikmu' }).click();
@@ -56,14 +60,202 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await page.getByRole('button', { name: 'Tutup', exact: true }).click();
   await page.evaluate(() => {
     Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
-    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text: string) => { (window as any).__shared = text; } }, configurable: true });
+    (window as any).__cardText = [];
+    const original = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (...args: Parameters<typeof original>) {
+      (window as any).__cardText.push(args[0]);
+      return original.apply(this,args);
+    };
   });
   await page.getByRole('button', { name: /Bagikan hasil/ }).click();
-  const text = await page.evaluate(() => (window as any).__shared as string);
-  expect(text).toContain('5.000 / 5.000'); expect(text).not.toMatch(/restoran|payung|kertas|biru|senang|makanan|mall/);
+  await expect(page.getByRole('img', { name:/Kartu skor Nyambung/ })).toBeVisible();
+  const downloadEvent = page.waitForEvent('download');
+  await page.getByRole('link', { name:'Unduh gambar', exact:true }).click();
+  const download = await downloadEvent;
+  expect(download.suggestedFilename()).toMatch(/^nyambung-daily-.*\.png$/);
+  const imagePath = `test-results/${testInfo.project.name}-share-card.png`;
+  await download.saveAs(imagePath);
+  const png = await readFile(imagePath);
+  expect(png.subarray(0,8).toString('hex')).toBe('89504e470d0a1a0a');
+  expect(png.readUInt32BE(16)).toBe(1080); expect(png.readUInt32BE(20)).toBe(1350);
+  const text = await page.evaluate(() => (window as any).__cardText.join(' ') as string);
+  expect(text).toContain('5.000'); expect(text).not.toMatch(/restoran|payung|kertas|biru|senang|makanan|mall/);
+  const fallbackDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name:'Bagikan gambar', exact:true }).click();
+  expect((await fallbackDownload).suggestedFilename()).toMatch(/\.png$/);
+  await page.evaluate(() => {
+    Object.defineProperty(navigator,'canShare',{configurable:true,value:(data:ShareData)=>data.files?.[0]?.type==='image/png'});
+    Object.defineProperty(navigator,'share',{configurable:true,value:async(data:ShareData)=>{
+      (window as any).__sharedImage = {count:data.files?.length,type:data.files?.[0]?.type,size:data.files?.[0]?.size,text:data.text,url:data.url};
+    }});
+  });
+  await page.getByRole('button', { name:'Bagikan gambar', exact:true }).click();
+  expect(await page.evaluate(() => (window as any).__sharedImage)).toMatchObject({count:1,type:'image/png',text:undefined,url:undefined});
+  await page.getByRole('button', { name:'Tutup', exact:true }).click();
   await page.reload(); await page.getByRole('button', { name: 'Lihat hasilmu' }).click();
   await expect(page.getByRole('heading', { name: 'Hasil daily' })).toBeVisible();
+  expect(await page.locator('.result-wave-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')))).toEqual(resultWaves);
 });
+
+test('result waves fill only in proportion to a non-perfect score', async ({ page }) => {
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.goto('/');await page.getByRole('button',{name:'Main',exact:true}).click();
+  const input=page.getByRole('textbox',{name:'SATU KATA VERSIMU'});
+  await input.fill('nongkrong');await input.press('Enter');
+  for(let stage=1;stage<5;stage++) {
+    await page.locator('.next-button').click();
+    await page.getByRole('button',{name:/Lewati babak/}).click();
+    await page.getByRole('button',{name:/Ya, lewati/}).click();
+  }
+  await page.locator('.next-button').click();
+  const run=await page.evaluate(async()=>(await(await fetch('/api/daily')).json()).run);
+  expect(run.results[0].score).toBeGreaterThan(0);expect(run.results[0].score).toBeLessThan(1000);
+  const clips=await page.locator('.result-wave-clip').evaluateAll(rects=>rects.map(rect=>Number(rect.getAttribute('width'))));
+  expect(clips[0]).toBeCloseTo(180*run.results[0].score/1000,3);
+  expect(clips[0]).toBeLessThan(180);expect(clips.slice(1)).toEqual([0,0,0,0]);
+  await expect(page.locator('.result-wave-progress')).toHaveCount(1);
+  await page.screenshot({path:'test-results/partial-score-waves.png'});
+});
+
+test('Continue animates out and into the next round without double navigation', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  await expect(page.locator('main')).toHaveAttribute('data-scene-state','idle');
+  await page.getByRole('button', { name:/Lewati babak/ }).click();
+  await page.getByRole('button', { name:/Ya, lewati/ }).click();
+  await expect(page.locator('.next-button')).toBeFocused();
+  await page.evaluate(() => {
+    (window as any).__sceneStates = [];
+    const main = document.querySelector('main')!;
+    new MutationObserver(() => (window as any).__sceneStates.push(main.dataset.sceneState)).observe(main, {attributes:true,attributeFilter:['data-scene-state']});
+  });
+  await page.locator('.next-button').evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
+  await expect(page.getByRole('textbox', { name:'SATU KATA VERSIMU' })).toBeFocused();
+  await expect(page.getByRole('progressbar', { name:'Progres babak' })).toHaveAttribute('aria-valuenow','2');
+  await expect(page.locator('main')).toHaveAttribute('data-scene-state','idle');
+  const states = await page.evaluate(() => (window as any).__sceneStates as string[]);
+  expect(states).toContain('leaving'); expect(states).toContain('entering'); expect(states.at(-1)).toBe('idle');
+  expect(await page.evaluate(async () => (await (await fetch('/api/daily')).json()).run.results.length)).toBe(1);
+});
+
+test('Continue changes rounds directly with reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'reduce' });
+  await page.goto('/');
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  await page.getByRole('button', { name:/Lewati babak/ }).click();
+  await page.getByRole('button', { name:/Ya, lewati/ }).click();
+  await page.locator('.next-button').click();
+  await expect(page.getByRole('textbox', { name:'SATU KATA VERSIMU' })).toBeFocused();
+  await expect(page.locator('main')).toHaveAttribute('data-scene-state','idle');
+  await expect(page.locator('.connection-board')).toHaveCSS('transform','none');
+});
+test('past Daily starts from the archive, resumes and completes without changing today', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'reduce' });
+  await page.goto('/');
+  const archive = await page.evaluate(async () => await (await fetch('/api/archive')).json());
+  const entry = archive.entries[0];
+  expect(entry.date < archive.today).toBe(true);
+  await page.getByRole('button', { name:'Arsip Daily', exact:true }).click();
+  await expectCenteredModal(page);
+  const label = new RegExp(`Daily #${String(entry.number).padStart(3,'0')}`);
+  const opening = page.waitForResponse(response => response.url().endsWith('/api/runs') && response.request().method() === 'POST');
+  await page.getByRole('dialog').getByRole('button', { name:label }).click();
+  const run = await (await opening).json();
+  expect(run.date).toBe(entry.date);
+  await expect(page.locator('.game-mode')).toContainText('Arsip');
+  await page.getByRole('button', { name:/Lewati babak/ }).click();
+  await page.getByRole('button', { name:/Ya, lewati/ }).click();
+  await page.reload();
+  await expect(page.getByRole('heading', { name:/Daily #/ })).toBeVisible();
+  expect(await page.evaluate(async () => (await (await fetch('/api/daily')).json()).run)).toBeNull();
+  await page.getByRole('button', { name:'Arsip Daily', exact:true }).click();
+  const continuing = page.waitForResponse(response => response.url().endsWith('/api/runs') && response.request().method() === 'POST');
+  await page.getByRole('dialog').getByRole('button', { name:label }).filter({ hasText:'Lanjutkan' }).click();
+  expect((await (await continuing).json()).id).toBe(run.id);
+  await expect(page.getByText('dilewati', { exact:true })).toBeVisible();
+  for(let stage=1;stage<5;stage++) {
+    await page.locator('.next-button').click();
+    await page.getByRole('button', { name:/Lewati babak/ }).click();
+    await page.getByRole('button', { name:/Ya, lewati/ }).click();
+  }
+  await page.locator('.next-button').click();
+  await expect(page.getByRole('heading', { name:'Hasil daily' })).toBeVisible();
+  expect(await page.evaluate(async () => (await (await fetch('/api/daily')).json()).run)).toBeNull();
+  await page.getByRole('button', { name:'Arsip Daily', exact:true }).click();
+  await page.getByRole('dialog').getByRole('button', { name:label }).filter({ hasText:'Lihat hasil' }).click();
+  await expect(page.getByRole('heading', { name:'Hasil daily' })).toBeVisible();
+  await page.getByRole('button', { name:'Nyambung, beranda' }).click();
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  await expect(page.locator('.game-mode')).toContainText('Daily #');
+});
+
+test('the empty answer form stays at the bottom of the game card', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'reduce' });
+  await page.goto('/');
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  const input = page.getByRole('textbox', { name:'SATU KATA VERSIMU' });
+  await expect(input).toHaveValue('');
+  await expect.poll(() => page.locator('.game-paper').evaluate(paper => {
+    const form = paper.querySelector('.answer-form')!;
+    const style = getComputedStyle(paper);
+    return Math.abs(paper.getBoundingClientRect().bottom - form.getBoundingClientRect().bottom - parseFloat(style.paddingBottom) - parseFloat(style.borderBottomWidth));
+  })).toBeLessThanOrEqual(1);
+});
+
+test('a submitted answer morphs into Continue before score details appear', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'no-preference' });
+  await page.goto('/');
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  const input = page.getByRole('textbox', { name:'SATU KATA VERSIMU' });
+  await input.fill('restoran');
+  await page.evaluate(() => {
+    const state = (window as any).__answerMorph = { widths:[] as number[], overlap:false, running:true };
+    function sample() {
+      if (!state.running) return;
+      const field = document.querySelector<HTMLElement>('.input-wrap[data-morphing="true"]');
+      if (field) {
+        state.widths.push(field.getBoundingClientRect().width);
+        if (document.querySelector('.score-block')) state.overlap = true;
+      }
+      requestAnimationFrame(sample);
+    }
+    sample();
+  });
+  await input.press('Enter');
+  await expect(page.locator('.score-block strong')).toContainText('1.000');
+  await expect(page.locator('.best-answer')).toHaveCSS('opacity','1');
+  await expect(page.locator('.next-button')).toBeFocused();
+  const state = await page.evaluate(() => {
+    const state = (window as any).__answerMorph;
+    state.running = false;
+    return { samples:state.widths.length, largest:Math.max(...state.widths), smallest:Math.min(...state.widths), overlap:state.overlap };
+  });
+  expect(state.samples).toBeGreaterThan(2);
+  expect(state.smallest).toBeLessThan(state.largest * .8);
+  expect(state.overlap).toBe(false);
+  await expect(page.locator('.answer-morph-label')).toHaveCount(0);
+  await page.keyboard.press('Enter');
+  await expect(input).toBeFocused();
+});
+
+test('reduced motion reveals the answer without a field morph', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion:'reduce' });
+  await page.goto('/');
+  await page.getByRole('button', { name:'Main', exact:true }).click();
+  await page.evaluate(() => {
+    (window as any).__morphSeen = false;
+    new MutationObserver(records => {
+      if (records.some(record => Array.from(record.addedNodes).some(node => node instanceof Element && (node.matches('.answer-morph-label') || node.querySelector('.answer-morph-label'))))) (window as any).__morphSeen = true;
+    }).observe(document.querySelector('.game-paper')!, {childList:true,subtree:true});
+  });
+  const input = page.getByRole('textbox', { name:'SATU KATA VERSIMU' });
+  await input.fill('restoran'); await input.press('Enter');
+  await expect(page.locator('.score-block strong')).toContainText('1.000');
+  await expect(page.locator('.next-button')).toBeFocused();
+  expect(await page.evaluate(() => (window as any).__morphSeen)).toBe(false);
+});
+
 test('skip requires confirmation and opens the stage result', async ({ page }) => {
   await page.goto('/'); await page.getByRole('button', { name: 'Main', exact: true }).click();
   await page.getByRole('button', { name: /Lewati babak/ }).click();
@@ -207,6 +399,7 @@ async function expectConnectedLines(page:Page) {
 }
 
 test('home, all five stages and recap fit the viewport', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   await page.evaluate(() => document.fonts.ready);
@@ -215,7 +408,7 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
     : [{ width:390,height:844 }, { width:375,height:667 }, { width:320,height:568 }, { width:390,height:430 }];
   for (const size of sizes) {
     await page.setViewportSize(size);
-    await expectFitsScreen(page, ['.site-header', '.site-header button', '.site-footer', '.site-footer button', '.daily-lobby', '.lobby-play']);
+    await expectFitsScreen(page, ['.site-header', '.site-header button', '.site-footer', '.site-footer button', '.daily-lobby', '.lobby-play', '.lobby-random']);
     await page.screenshot({ path:`test-results/fit-home-${size.width}x${size.height}.png` });
   }
   await page.getByRole('button', { name: 'Main', exact: true }).click();
@@ -250,17 +443,80 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
   }
 });
 
+for (const keyboardMode of ['visual viewport', 'layout viewport']) {
+  test(`mobile keyboard dismisses the navbar smoothly and fits the card (${keyboardMode})`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== 'mobile');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    await page.getByRole('button', { name: 'Main', exact: true }).click();
+    const input = page.getByRole('textbox', { name: 'SATU KATA VERSIMU' });
+    await expect(input).toBeFocused();
+    const header = await page.locator('.site-header').boundingBox();
+    const fullViewport = await page.evaluate(() => ({ height: visualViewport!.height, offsetTop: visualViewport!.offsetTop, layoutHeight: innerHeight }));
+    for (const height of [480, 430, 340]) {
+      await page.evaluate(({ height, resizeLayout }) => {
+        const viewport = window.visualViewport!;
+        Object.defineProperty(viewport, 'height', { configurable: true, value: height });
+        Object.defineProperty(viewport, 'offsetTop', { configurable: true, value: 12 });
+        if (resizeLayout) Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
+        viewport.dispatchEvent(new Event('resize'));
+      }, { height, resizeLayout: keyboardMode === 'layout viewport' });
+      await expect(page.locator('html')).toHaveAttribute('data-keyboard', 'open');
+      await expect.poll(async () => page.locator('.site-header').evaluate(el => {
+        const style = getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style.opacity === '0' || rect.bottom <= 1;
+      })).toBe(true);
+      await expect.poll(() => page.locator('.game-paper').evaluate(paper => {
+        const clue = paper.querySelector('.clue')!;
+        const style = getComputedStyle(paper);
+        return Math.abs(clue.getBoundingClientRect().top - paper.getBoundingClientRect().top - parseFloat(style.paddingTop) - parseFloat(style.borderTopWidth));
+      })).toBeLessThanOrEqual(5);
+      await expect.poll(() => page.evaluate(() => {
+        const answer = document.querySelector('.answer-node')!.getBoundingClientRect();
+        const field = document.querySelector('.input-wrap')!.getBoundingClientRect();
+        return field.top - answer.bottom;
+      })).toBeLessThanOrEqual(40);
+      for (const selector of ['.clue', '.answer-node', '.input-wrap', '.input-meta']) {
+        for (const element of await page.locator(selector).all()) {
+          const box = await element.boundingBox();
+          expect(box!.y).toBeGreaterThanOrEqual(0);
+          expect(box!.y + box!.height).toBeLessThanOrEqual(height + 25);
+        }
+      }
+    }
+    await page.evaluate(({ height, offsetTop, layoutHeight }) => {
+      const viewport = window.visualViewport!;
+      Object.defineProperty(viewport, 'height', { configurable: true, value: height });
+      Object.defineProperty(viewport, 'offsetTop', { configurable: true, value: offsetTop });
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: layoutHeight });
+      viewport.dispatchEvent(new Event('resize'));
+    }, fullViewport);
+    await expect(page.locator('html')).toHaveAttribute('data-keyboard', 'closed');
+    await expect(page.locator('.site-footer')).toBeVisible();
+    await expect(page.locator('.site-header')).toHaveCSS('height', `${header!.height}px`);
+    await expect(input).toBeFocused();
+  });
+}
+
 test('random mode resumes independently and can be played again', async ({ page }, testInfo) => {
   await page.emulateMedia({ reducedMotion:'reduce' });
+  await page.addInitScript(() => localStorage.setItem('nyambung-mode', 'random'));
   await page.goto('/');
-  await page.getByRole('button', { name:'Acak', exact:true }).click();
-  await expect(page.getByRole('heading', { name:'Main acak' })).toBeVisible();
-  await page.getByRole('button', { name:'Main', exact:true }).click();
+  await expect(page.getByRole('heading', { name:/Daily #/ })).toBeVisible();
+  await expect(page.getByRole('group', { name:'Mode permainan' })).toHaveCount(0);
+  const dailyButton = page.getByRole('button', { name:'Main', exact:true });
+  const randomButton = page.getByRole('button', { name:'Random Play', exact:true });
+  const dailyBox = await dailyButton.boundingBox(), randomBox = await randomButton.boundingBox();
+  expect(randomBox!.y).toBeGreaterThan(dailyBox!.y + dailyBox!.height);
+  expect(await randomButton.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(await dailyButton.evaluate(el => getComputedStyle(el).backgroundColor));
+  await randomButton.click();
   const firstId = await page.evaluate(async () => (await (await fetch('/api/random')).json()).run.id as string);
   await page.getByRole('button', { name:/Lewati babak/ }).click(); await page.getByRole('button', { name:/Ya, lewati/ }).click();
   await page.reload();
-  await expect(page.getByRole('button', { name:'Acak', exact:true })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name:'Lanjutkan bermain' }).click();
+  await expect(page.getByRole('heading', { name:/Daily #/ })).toBeVisible();
+  await page.getByRole('button', { name:'Lanjutkan Random Play', exact:true }).click();
+  expect(await page.evaluate(async () => (await (await fetch('/api/random')).json()).run.id)).toBe(firstId);
   await expect(page.getByText('dilewati', { exact:true })).toBeVisible();
   await expect(page.locator('.best-answer p')).toHaveCount(0);
   // A skipped answer has no filled connection or pulse to animate.
@@ -279,7 +535,7 @@ test('random mode resumes independently and can be played again', async ({ page 
   expect(secondId).not.toBe(firstId);
   await expect(page.getByRole('textbox', { name:'SATU KATA VERSIMU' })).toBeVisible();
   await page.getByRole('button', { name:'Nyambung, beranda' }).click();
-  await page.getByRole('button', { name:'Daily', exact:true }).click();
+  await expect(page.getByRole('heading', { name:/Daily #/ })).toBeVisible();
   await page.getByRole('button', { name:'Main', exact:true }).click();
   await expect(page.locator('.clue-grid')).toContainText('makanan');
   const stats = await page.evaluate(async () => (await (await fetch('/api/me/stats')).json()));

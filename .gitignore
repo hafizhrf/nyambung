@@ -9,6 +9,7 @@ playwright-report/
 test-results/
 .codebase-memory/
 .DS_Store
+.wrangler/
 *.log
 *.sqlite
 *.sqlite-shm

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
 import { eq, and, isNull } from 'drizzle-orm';
-import { answerInput, type DailyView } from '@nyambung/shared';
+import { answerInput, startDailyInput, type DailyView } from '@nyambung/shared';
 import { daily, players, runs } from './schema.js';
 import { game, GameError } from './game.js';
 import { wibDate, nextReset } from './time.js';
@@ -52,7 +52,8 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
       let playerId = getCookie(c, 'nyambung_session');
       if (!playerId || !store.orm.select().from(players).where(eq(players.id, playerId)).get()) {
         playerId = service.createPlayer();
-        setCookie(c, 'nyambung_session', playerId, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'Lax', path: '/', maxAge: 365 * 86400 });
+        const isHttps = c.req.header('x-forwarded-proto') === 'https' || c.req.url.startsWith('https:');
+        setCookie(c, 'nyambung_session', playerId, { httpOnly: true, secure: isHttps, sameSite: 'Lax', path: '/', maxAge: 365 * 86400 });
       }
       c.set('playerId', playerId);
     }
@@ -77,7 +78,11 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
   });
   app.get('/api/discord/instances/:id/progress', async c => {
     if (!discord || !c.get('discordSession')) return c.json({ error: 'Masuk melalui Discord terlebih dahulu.' }, 401);
-    return c.json(await discord.progress(c.req.param('id'), c.get('discordSession')));
+    return c.json(await discord.progress(c.req.param('id'), c.get('discordSession'), c.req.query('runId')));
+  });
+  app.get('/api/discord/scores/:runId', async c => {
+    if (!discord || !c.get('discordSession')) return c.json({error:'Masuk melalui Discord terlebih dahulu.'},401);
+    return c.json(await discord.serverScores(c.get('discordSession'),c.req.param('runId')));
   });
   app.get('/api/daily', c => {
     const now = clock(); const date = wibDate(now);
@@ -86,10 +91,19 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
     const result: DailyView = { date, serverTime: now.toISOString(), resetsAt: nextReset(now), available: !!puzzle, number: puzzle?.number ?? null, demo: puzzle?.demo ?? false, run: run ? service.view(run.id, c.get('playerId')) : null };
     return c.json(result);
   });
+  app.get('/api/archive', c => c.json(service.archive(c.get('playerId'), c.req.query('before'))));
   app.get('/api/random', c => c.json(service.randomStatus(c.get('playerId'))));
   app.post('/api/random/runs', c => c.json(service.startRandom(c.get('playerId'))));
   app.get('/api/runs/:id/comparison', c => c.json(service.comparison(c.req.param('id'), c.get('playerId'))));
-  app.post('/api/runs', c => c.json(service.start(c.get('playerId'))));
+  app.post('/api/runs', async c => {
+    const raw = await c.req.text();
+    let input: unknown = {};
+    try { if (raw.trim()) input = JSON.parse(raw); }
+    catch { return c.json({ error:'Tanggal tidak valid.' }, 400); }
+    const parsed = startDailyInput.safeParse(input);
+    if (!parsed.success) return c.json({ error:'Tanggal tidak valid.' }, 400);
+    return c.json(service.start(c.get('playerId'), parsed.data.date));
+  });
   app.get('/api/runs/:id', c => c.json(service.view(c.req.param('id'), c.get('playerId'))));
   app.post('/api/runs/:id/answers', async c => {
     const parsed = answerInput.safeParse(await c.req.json().catch(() => null));

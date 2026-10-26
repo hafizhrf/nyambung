@@ -590,6 +590,10 @@ export function Mabar({
     const log = chatLog.current;
     if (log) log.scrollTop = log.scrollHeight;
   }, [room?.messages.length, lobby]);
+  // A rejected word belongs to its round; clear it once the match moves on.
+  useEffect(() => {
+    if (m) setError("");
+  }, [m?.id, m?.phase, m?.stage]);
   const taskKey = m ? `nyambung-mabar-draft:${m.id}:${m.stage}` : "";
   useEffect(() => {
     setInput("");
@@ -1092,7 +1096,7 @@ export function Mabar({
                     : m.mode === "word"
                       ? m.phase === "countdown"
                         ? "Bersiap"
-                        : `Putaran ${m.round ?? 1} · ${alive}/${players.length} bertahan`
+                        : `Putaran ${m.round ?? 1} · ${alive} bertahan`
                       : `${phaseLabels[m.phase]} · ${Math.min(m.stage + 1, m.total)}/${m.total}`
               }
               className="mabar-arena"

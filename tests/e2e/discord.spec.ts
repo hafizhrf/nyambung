@@ -211,6 +211,16 @@ test('arcade server scores retry, expand and contain long Unicode player names',
   expect(await scores.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
   expect(await frame.locator('html').evaluate(el=>el.scrollWidth<=innerWidth)).toBe(true);
   await expect(frame.locator('main')).toHaveCSS('overflow-y','auto');
+  for(const [width,height] of [[320,568],[390,844],[844,390],[1280,720]]){
+    await page.setViewportSize({width,height});
+    await frame.locator('main').evaluate(el=>{el.scrollTop=0;});
+    await expect.poll(()=>frame.locator('.results-page h1').evaluate(title=>title.getBoundingClientRect().top-document.querySelector('.site-header')!.getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(12);
+    await expect.poll(()=>frame.locator('.result-kicker').evaluate(kicker=>kicker.getBoundingClientRect().top-document.querySelector('.results-page h1')!.getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(6);
+    expect(await frame.locator('.results-page').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+    await frame.getByRole('button',{name:'Bagikan hasil',exact:true}).scrollIntoViewIfNeeded();
+    await expect(frame.getByRole('button',{name:'Bagikan hasil',exact:true})).toBeInViewport();
+  }
+  await page.setViewportSize({width:320,height:568});
   await frame.locator('main').evaluate(el=>{el.scrollTop=0;});
   await page.screenshot({path:`test-results/${testInfo.project.name}-arcade-server-scores.png`});
 });

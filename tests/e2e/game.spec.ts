@@ -384,13 +384,15 @@ async function expectFitsScreen(page: Page, selectors: string[]) {
     const problems = selectors.flatMap(selector => Array.from(document.querySelectorAll<HTMLElement>(selector)).flatMap(el => {
       if (!el.getClientRects().length) return [];
       const box = el.getBoundingClientRect();
-      return box.top < -1 || box.left < -1 || box.bottom > height + 1 || box.right > width + 1 ? [`${selector}: ${JSON.stringify(box.toJSON())} in ${width}x${height}`] : [];
+      const main=document.querySelector('main')!;
+      const scrollableRecap=!!el.closest('.results-page')&&main.scrollHeight>main.clientHeight+2&&getComputedStyle(main).overflowY==='auto';
+      return (!scrollableRecap&&(box.top < -1||box.bottom > height+1))||box.left < -1||box.right > width+1 ? [`${selector}: ${JSON.stringify(box.toJSON())} in ${width}x${height}`] : [];
     }));
     if (document.documentElement.scrollHeight > innerHeight + 1 || document.documentElement.scrollWidth > innerWidth + 1 || scrollY !== 0) problems.push('Document scrolls');
     // Also catch content clipped by the fixed app shell.
     for (const selector of ['main', '.game-paper', '.daily-lobby', '.results-page', '.results-list', '.row-score']) {
       const el = document.querySelector<HTMLElement>(selector);
-      if (el && el.scrollHeight > el.clientHeight + 2) problems.push(`${selector} overflows: ${el.scrollHeight}/${el.clientHeight}`);
+      if (el && el.scrollHeight > el.clientHeight + 2 && !(selector==='main'&&el.querySelector('.results-page')&&getComputedStyle(el).overflowY==='auto')) problems.push(`${selector} overflows: ${el.scrollHeight}/${el.clientHeight}`);
       if (el && ['.results-list','.row-score'].includes(selector) && el.scrollWidth > el.clientWidth + 2) problems.push(`${selector} overflows horizontally: ${el.scrollWidth}/${el.clientWidth}`);
     }
     return problems;
@@ -419,6 +421,11 @@ async function expectConnectedLines(page:Page) {
 
 test('home, all five stages and recap fit the viewport', async ({ page }, testInfo) => {
   test.setTimeout(60_000);
+  await page.route('**/api/runs/*/answers',async route=>{
+    const response=await route.fetch(),run=await response.json();
+    for(const result of run.results)if(result.rank)result.vocabularySize=85306;
+    await route.fulfill({response,json:run});
+  });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/');
   await page.evaluate(() => document.fonts.ready);
@@ -445,6 +452,10 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
     for (const size of sizes) {
       await page.setViewportSize(size);
       await expectFitsScreen(page, ['.clue', '.answer-node', '.score-block', '.best-answer', '.next-button']);
+      await expect.poll(()=>page.locator('.score-block strong').evaluate(el=>{
+        const value=el.querySelector('span')!,denominator=el.querySelector('small')!;
+        return value.scrollWidth<=value.clientWidth+1&&denominator.scrollWidth<=denominator.clientWidth+1&&denominator.getBoundingClientRect().height<=parseFloat(getComputedStyle(denominator).lineHeight)+1;
+      })).toBe(true);
       await expect.poll(()=>page.locator('.game-paper').evaluate(paper=>{
         const next=paper.querySelector('.next-button')!;
         return paper.getBoundingClientRect().bottom-next.getBoundingClientRect().bottom;
@@ -462,7 +473,16 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
   await expect(page.getByRole('heading', { name:'Hasil daily' })).toBeVisible();
   for (const size of sizes) {
     await page.setViewportSize(size);
-    await expectFitsScreen(page, ['.site-header', '.results-list', '.result-actions', '.next-daily']);
+    await page.locator('main').evaluate(el=>{el.scrollTop=0;});
+    await expectFitsScreen(page, ['.site-header']);
+    await expect.poll(()=>page.locator('.results-page h1').evaluate(title=>title.getBoundingClientRect().top-document.querySelector('.site-header')!.getBoundingClientRect().bottom)).toBeGreaterThanOrEqual(12);
+    for(const selector of ['.result-row','.result-actions button','.next-daily button']){
+      for(const element of await page.locator(selector).all()){
+        await element.scrollIntoViewIfNeeded();
+        await expect(element).toBeInViewport({ratio:.95});
+      }
+    }
+    await page.locator('main').evaluate(el=>{el.scrollTop=0;});
     await page.screenshot({ path:`test-results/fit-${size.width}x${size.height}.png` });
   }
 });

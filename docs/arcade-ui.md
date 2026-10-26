@@ -23,6 +23,10 @@ berjarak tetap, tanpa ruang tengah yang meregang di layar tinggi. Layout
 landscape pendek tetap memakai dua kolom. Input HP memakai font minimal 16 px.
 Saat keyboard virtual menutup setelah submit, status keyboard dipertahankan
 sampai tinggi visual viewport pulih, walaupun fokus sudah ke tombol Lanjut.
+Skor babak memakai angka dan penyebut pada dua baris terkontrol; `/ 1.000`
+tetap satu baris utuh dan ukuran angka mengikuti lebar kolom skor. Judul rekap
+mendapat ruang di atas bingkai serta jarak dari tanggal di dalamnya. Rekap yang
+tinggi, termasuk leaderboard Discord, bergulir di area konten tanpa menimpa header.
 Jika ruang keyboard sangat pendek, hanya bagian dalam kartu yang bergulir;
 input dan tombol aktif dibawa ke area terlihat setelah layout diperbarui.
 Tes mencakup visual viewport dan layout viewport yang menyusut, offset viewport,
@@ -81,6 +85,7 @@ Screenshot memakai konten demo dan mock Discord, bukan data pemain produksi.
 | --- | --- |
 | Logo lampu reklame | [Video](screenshots/arcade-marquee.webm) |
 | Gerakan gelombang CRT | [Video](screenshots/arcade-crt-wave.webm) |
+| Judul Daily dan skor responsif | [Rekap Discord](screenshots/arcade-daily-header.png) · [Mobile](screenshots/arcade-daily-header-mobile.png) · [Skor babak](screenshots/arcade-stage-score.png) |
 | Kartu permainan rapat | [Panel hasil](screenshots/arcade-compact-result.png) · [Simulasi keyboard](screenshots/arcade-keyboard-compact.png) · [Hasil saat keyboard menutup](screenshots/arcade-keyboard-result.png) |
 | Jawaban dan jalur terpisah | [Tiga kata](screenshots/arcade-answer-ports.png) |
 | Main lagi memotong bingkai | [Normal](screenshots/arcade-random-replay.png) · [Redup](screenshots/arcade-random-replay-disabled.png) · [Mobile](screenshots/arcade-random-replay-mobile.png) |
@@ -115,6 +120,11 @@ memulihkan babak serta draft saat kembali ke Activity penuh. Keyboard mobile
 menggunakan layout penuh dan safe area Discord tetap dihormati.
 
 ## Verifikasi
+
+Perbaikan jarak judul dan format skor diverifikasi dengan 12 tes gameplay,
+rekap, leaderboard Discord, serta keyboard. Penyebut skor diperiksa tetap satu
+baris, judul terpisah dari header/tanggal, dan setiap kontrol rekap bisa dijangkau
+pada layar sempit maupun pendek. Dua tes keyboard mobile dilewati pada desktop.
 
 Perbaikan Main lagi diverifikasi dengan empat tes layout/random desktop-mobile.
 Tes pixel memeriksa bahwa garis tidak tersisa di celah tombol saat opacity nol,

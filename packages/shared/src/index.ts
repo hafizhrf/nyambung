@@ -20,3 +20,4 @@ export const normalizeWord = (value: string) => value.normalize('NFKC').trim().t
 export const stageNames: Record<StageKind, string> = { bridge2: 'Di tengah kata', bridge3: 'Tiga sambungan', closest: 'Sedekat makna' };
 
 export { crtImage } from './crtImage.js';
+export * from './mabar.js';

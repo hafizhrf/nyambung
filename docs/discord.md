@@ -109,7 +109,7 @@ selama proses ini. Animasi loading mengikuti pengaturan Motion dan reduced motio
 ### Efek CRT dan skor di halaman hasil
 
 Website dan Activity menggunakan satu tema arcade gelap dengan font pixel tegak Press Start 2P,
-bingkai pixel, dan palet lokal. Tombol **Efek CRT** di header mengaktifkan atau
+bingkai pixel, dan palet lokal. Tombol **Efek CRT** di Pengaturan mengaktifkan atau
 mematikan lengkungan tabung, vignette, phosphor, scanline statis, dan glow tipis. Pilihan disimpan di perangkat; kontrol
 Motion dan Suara tetap terpisah. Gelombang mendistorsi konten; tidak memakai overlay putih bergerak. Distorsi horizontal berhenti
 saat Motion off atau reduced motion aktif. Preferensi tema terang/gelap lama diabaikan.
@@ -246,3 +246,8 @@ mengembalikan posisi babak dan draft yang sama tanpa membuat permainan baru.
 Subscription layout tidak menahan login. Klien lama yang tidak mengirim event
 layout memakai fallback ukuran jendela. Penyusutan viewport karena keyboard mobile
 tidak mengaktifkan PiP. Modal ditutup saat masuk PiP supaya tidak menutupi ringkasan.
+
+## Mabar opsional
+
+Jika `MABAR_ENABLED=true`, Activity membuka lobby mabar otomatis, dengan menu Solo untuk Daily/Acak.
+Room mengikuti instance Activity terverifikasi dan tidak menerima guest web. Lihat [panduan mabar](mabar.md).

@@ -163,3 +163,10 @@ font sistem dan cache di `/tmp`; konfigurasi aplikasi tidak diubah.
 Teks footer promosi/keterangan seperti “Tanpa bocoran jawaban” tidak ditampilkan
 di kartu bot maupun gambar share. Perubahan versi desain kartu memicu render
 ulang pesan channel yang sudah ada pada tick bot setelah backend diperbarui.
+
+## Mabar
+
+Empat arena mabar memakai token arcade yang sama, dengan lobby, roster, timer, chat, galeri,
+dan podium. Canvas input berada di luar distorsi CRT agar sentuhan/pointer tetap tepat.
+Galeri dan PNG hasil tetap mendapat CRT/bloom. Detail room, identitas, dan deployment:
+[Mabar](mabar.md).

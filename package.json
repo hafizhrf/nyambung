@@ -26,6 +26,7 @@
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "^8.18.2",
     "concurrently": "^9.2.0",
     "esbuild": "^0.28.2",
     "tsx": "^4.20.0",
@@ -38,5 +39,8 @@
   "allowScripts": {
     "better-sqlite3@12.11.1": true,
     "esbuild@0.28.2": true
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
   }
 }

@@ -454,3 +454,17 @@ describe('multiple allowed Discord servers',()=>{
     expect((await interact({guild_id:botId})).data.data.content).toContain('beta');
   });
 });
+
+it('creates a verified mabar lobby per Activity, keeps Discord profiles and rejects cross-instance guests',async()=>{
+  const {createMabar}=await import('../apps/api/src/mabar.js');
+  const mabar=createMabar(store,()=>now.getTime());
+  app=createApp(store,()=>now,{discord:service,bot,mabar});
+  const a=await login(alice,'mabar-one'),b=await login(bob,'mabar-one');
+  const first=await api('/mabar/discord',a.data.sessionToken,{}),second=await api('/mabar/discord',b.data.sessionToken,{});
+  expect(first.status).toBe(200);expect(second.data.id).toBe(first.data.id);
+  expect(second.data.source).toBe('discord');expect(second.data.members.map((p:any)=>p.name)).toEqual(['Alice','Bob']);
+  const profile=await api('/mabar/profile',a.data.sessionToken,{name:'Fake guest'});expect(profile.status).toBe(403);
+  const other=await login(alice,'mabar-two');const third=await api('/mabar/discord',other.data.sessionToken,{});expect(third.data.id).not.toBe(first.data.id);
+  expect((await api(`/mabar/rooms/${first.data.id}/join`,other.data.sessionToken,{})).status).toBe(403);
+  const noAuth=await app.request(`https://nyambung.example/api/mabar/rooms/${first.data.id}`);expect(noAuth.status).not.toBe(200);
+});

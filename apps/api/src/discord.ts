@@ -47,7 +47,7 @@ export class DiscordClient {
 const userSchema = z.object({ id: snowflake, username: z.string(), global_name: z.string().nullish(), avatar: z.string().nullish() });
 const instanceSchema = z.object({ application_id: snowflake, instance_id: instanceId, location: z.object({ guild_id: snowflake.optional(), channel_id: snowflake.optional() }), users: z.array(snowflake).max(1000) });
 type Instance = z.infer<typeof instanceSchema>;
-export interface DiscordSession { discordId: string; playerId: string; instanceId: string }
+export interface DiscordSession { discordId: string; playerId: string; instanceId: string; expiresAt?:number }
 export function createDiscordService(store: Store, config: DiscordConfig, clock: () => Date = () => new Date(), fetcher: typeof fetch = fetch) {
   const client = new DiscordClient(config, fetcher);
   const nonces = new Map<string, number>();
@@ -76,6 +76,12 @@ export function createDiscordService(store: Store, config: DiscordConfig, clock:
     if (!cached.data.users.includes(discordId)) throw new DiscordError('Kamu bukan peserta Activity ini.', 403);
     return cached.data;
   }
+  async function instanceAlive(id:string) {
+    try {
+      const data=instanceSchema.parse(await client.request(`/applications/${config.applicationId}/activity-instances/${encodeURIComponent(id)}`));
+      return data.application_id===config.applicationId&&data.instance_id===id&&!!data.location.guild_id&&discordGuildIds(config).includes(data.location.guild_id);
+    } catch(error){if(error instanceof DiscordHttpError&&error.status===404)return false;throw error;}
+  }
   async function authenticate(input: unknown): Promise<DiscordAuthResult> {
     const parsed = z.object({ code: z.string().min(1).max(2048), nonce: z.string().length(48), instanceId }).safeParse(input);
     if (!parsed.success) throw new DiscordError('Permintaan masuk Discord tidak valid.', 400);
@@ -100,9 +106,9 @@ export function createDiscordService(store: Store, config: DiscordConfig, clock:
   }
   function session(header: string): DiscordSession {
     if (!/^Bearer [\da-f]{64}$/.test(header)) throw new DiscordError('Sesi Discord tidak valid. Buka kembali permainan.', 401);
-    const row = store.sqlite.prepare(`SELECT s.discord_id, i.player_id, s.instance_id FROM discord_sessions s JOIN discord_identities i ON i.discord_id=s.discord_id WHERE s.token_hash=? AND s.expires_at>?`).get(digest(header.slice(7)), clock().getTime()) as { discord_id: string; player_id: string; instance_id: string } | undefined;
+    const row = store.sqlite.prepare(`SELECT s.discord_id, i.player_id, s.instance_id, s.expires_at FROM discord_sessions s JOIN discord_identities i ON i.discord_id=s.discord_id WHERE s.token_hash=? AND s.expires_at>?`).get(digest(header.slice(7)), clock().getTime()) as { discord_id: string; player_id: string; instance_id: string;expires_at:number } | undefined;
     if (!row) throw new DiscordError('Sesi Discord habis. Masuk kembali untuk melanjutkan.', 401);
-    return { discordId: row.discord_id, playerId: row.player_id, instanceId: row.instance_id };
+    return { discordId: row.discord_id, playerId: row.player_id, instanceId: row.instance_id, expiresAt:row.expires_at };
   }
   async function progress(id: string, viewer: DiscordSession, runId?: string): Promise<DiscordRoomProgress> {
     if (viewer.instanceId !== id) throw new DiscordError('Activity tidak sesuai dengan sesi.', 403);
@@ -155,6 +161,6 @@ export function createDiscordService(store: Store, config: DiscordConfig, clock:
       return verify(null, Buffer.from(timestamp + raw), key, Buffer.from(signature, 'hex'));
     } catch { return false; }
   }
-  return { config, client, bootstrap, authenticate, session, progress, serverScores, verifyInteraction };
+  return { instanceAlive, verifiedInstance: instance, config, client, bootstrap, authenticate, session, progress, serverScores, verifyInteraction };
 }
 export type DiscordService = ReturnType<typeof createDiscordService>;

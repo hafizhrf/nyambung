@@ -112,11 +112,11 @@ Jadwalkan setiap hari, misalnya cron dengan **path absolut** ke node, checkout, 
 0 2 * * * cd /srv/nyambung && DATABASE_PATH=/srv/nyambung/data/production.sqlite /usr/bin/node --import tsx scripts/backup.ts >> /srv/nyambung/backups/backup.log 2>&1
 ```
 
-Perintah backup menghasilkan `.sqlite.gz` dan menyisakan satu backup Nyambung terbaru setelah file baru selesai dibuat. Backup lama tetap ada jika backup atau kompresi gagal. File sementara dan file lain tidak ikut retensi. Untuk restore, dekompresi `.sqlite.gz` menjadi `.sqlite` terlebih dahulu. Simpan salinan terpisah jika memerlukan arsip jangka panjang. Untuk restore, hentikan layanan, pindahkan file database beserta `-wal`/`-shm` lama ke lokasi cadangan, lalu salin backup konsisten ke path database dan jalankan lagi. Jangan menyalin file database aktif secara manual. Periksa `PRAGMA integrity_check` dan jumlah paket/run setelah restore. Pantau error HTTP, disk/backup harian, dan stok tanggal daily; perintah CLI keluar nonzero saat gagal.
+Perintah backup menghasilkan `.tar.gz` berisi snapshot SQLite dan avatar yang direferensikan, dan menyisakan satu backup Nyambung terbaru setelah file baru selesai dibuat. Backup lama tetap ada jika backup atau kompresi gagal. File sementara dan file lain tidak ikut retensi. Untuk restore, ekstrak arsip ke direktori sementara dan pulihkan database beserta `uploads/`. Backup `.sqlite.gz` lama tetap dapat dipakai dengan dekompresi terlebih dahulu; format itu tidak membawa avatar. Simpan salinan terpisah jika memerlukan arsip jangka panjang. Untuk restore, hentikan layanan, pindahkan file database beserta `-wal`/`-shm` lama ke lokasi cadangan, lalu salin backup konsisten ke path database dan jalankan lagi. Jangan menyalin file database aktif secara manual. Periksa `PRAGMA integrity_check` dan jumlah paket/run setelah restore. Pantau error HTTP, disk/backup harian, dan stok tanggal daily; perintah CLI keluar nonzero saat gagal.
 
 ## Discord berikutnya
 
-`PlatformAdapter` di frontend memisahkan bootstrap identitas dan share; adapter browser memakai cookie. Layanan permainan tidak tergantung React atau Discord SDK. Integrasi Activity berikutnya menambah Embedded App SDK, URL mapping/proxy dan autentikasi server dengan identitas Discord terverifikasi. Cookie browser tidak diasumsikan bekerja lintas iframe; identitas Discord harus ditangani adapter/server tersendiri. V1 belum memasang SDK, bot, leaderboard, atau sinkronisasi multiplayer.
+`PlatformAdapter` di frontend memisahkan bootstrap identitas dan share; adapter browser memakai cookie. Layanan permainan tidak tergantung React atau Discord SDK. Integrasi Activity memakai Embedded App SDK, URL mapping/proxy dan autentikasi server dengan identitas Discord terverifikasi. Cookie browser tidak diasumsikan bekerja lintas iframe; identitas Discord harus ditangani adapter/server tersendiri. Mabar opsional menambahkan sinkronisasi WebSocket; SDK, bot, dan leaderboard Daily tetap dapat dipakai saat mabar nonaktif.
 
 Audio antarmuka memakai enam efek dari **Kenney UI SFX Set** (CC0), dikonversi ke WAV mono untuk browser desktop dan mobile. Aset dan lisensi aslinya ada di `apps/web/public/audio/kenney/`. Suara baru diaktifkan setelah interaksi pemain; toggle **Suara** menyimpan pilihan di browser. Audio yang gagal dimuat tidak menghalangi permainan.
 
@@ -207,3 +207,10 @@ mobile, landscape, serta Discord PiP. Tes SDK memakai mock; pengujian langsung
 Discord desktop/iOS/Android tetap memerlukan akun beta sesuai `docs/discord.md`.
 
 Lihat [preview arcade dan screenshot](docs/arcade-ui.md).
+
+## Mabar
+
+Empat mode mabar, room web/password, profil guest dengan avatar lokal, serta lobby Discord
+otomatis tersedia di balik `MABAR_ENABLED` (default `false`). Lihat [panduan mabar](docs/mabar.md)
+untuk aturan, konfigurasi WSS, backup avatar, dan pengujian. Fitur memakai satu proses dan volume
+SQLite yang sama; permainan solo tetap terpisah.

@@ -1,3 +1,6 @@
+import { createMabar } from './mabar.js';
+import { attachMabar } from './mabar-ws.js';
+import { pruneAvatars } from './mabar-http.js';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
 import { resolve } from 'node:path';
@@ -9,13 +12,19 @@ try { process.loadEnvFile(resolve(import.meta.dirname, '../../../.env')); } catc
 const store = openDatabase();
 const config = discordConfig();
 const discord = config ? createDiscordService(store, config) : undefined;
-const bot = discord ? createDiscordBot(store, discord) : undefined;
-const app = createApp(store, undefined, { discord, bot });
+const mabar=process.env.MABAR_ENABLED==='true'?createMabar(store):undefined;
+const bot = discord ? createDiscordBot(store, discord, undefined, mabar) : undefined;
+const app = createApp(store, undefined, { discord, bot, mabar });
 const stopBot = bot?.start();
 const web = resolve(import.meta.dirname, '../../web/dist');
 app.use('*', async (c, next) => { c.header('X-Content-Type-Options', 'nosniff'); c.header('Referrer-Policy', 'strict-origin-when-cross-origin'); await next(); });
 app.get('*', serveStatic({ root: web }));
 app.use('*', async (c, next) => { if (c.req.path.startsWith('/api/')) return c.notFound(); return await serveStatic({ path: resolve(web, 'index.html') })(c, next); });
 const server = serve({ fetch: app.fetch, port: Number(process.env.PORT || 3000), hostname: process.env.HOST || '127.0.0.1' }, info => console.log(`Nyambung API: http://127.0.0.1:${info.port}`));
-function close() { server.close(async () => { await stopBot?.(); store.sqlite.close(); process.exit(0); }); }
+const stopMabar=mabar?attachMabar(server as import('node:http').Server,mabar,[process.env.PUBLIC_ORIGIN||'http://127.0.0.1:3000',...(process.env.NODE_ENV!=='production'&&!process.env.PUBLIC_ORIGIN?['http://localhost:5173','http://127.0.0.1:5173']:[]),...(config?[`https://${config.applicationId}.discordsays.com`]:[])],async i=>{if(i.source==='discord'&&discord&&i.discordId)await discord.verifiedInstance(i.discordKey!.split(':')[1],i.discordId,true);}):undefined;
+if(mabar)void pruneAvatars(store);
+const cleanup=mabar?setInterval(()=>void pruneAvatars(store),3600000):undefined;
+let reaping:Promise<void>|undefined;
+const discordCleanup=mabar&&discord?setInterval(()=>{if(!reaping)reaping=mabar.reapDiscord(discord.instanceAlive).catch(error=>console.error('Activity cleanup failed',error)).finally(()=>{reaping=undefined;});},30000):undefined;
+function close() { stopMabar?.();clearInterval(cleanup);clearInterval(discordCleanup); server.close(async () => { await reaping;await stopBot?.(); store.sqlite.close(); process.exit(0); }); }
 process.on('SIGTERM', close); process.on('SIGINT', close);

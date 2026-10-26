@@ -58,7 +58,7 @@ main:focus { outline:none; }
 /* Cabinet panels share the same stepped, double-line frame. */
 .archive-trigger { white-space:nowrap; font-size:11px; }
 /* Gameplay HUD and the five stage cartridge slots. */
-.game-page { width:100%; max-width:800px; height:auto; max-height:100%; min-height:0; margin:auto; display:grid; grid-template-rows:36px 44px minmax(0,1fr); gap:10px; }
+.game-page { width:100%; max-width:800px; height:auto; max-height:100%; min-height:0; margin:0 auto; align-self:start; display:grid; grid-template-rows:36px 44px minmax(0,1fr); gap:10px; }
 .arcade-hud { display:flex; align-items:center; justify-content:space-between; gap:8px; font-size:12px; }
 .game-context { display:flex; align-items:center; gap:6px; min-width:0; }
 .game-mode { color:var(--purple); overflow-wrap:anywhere; }
@@ -521,3 +521,73 @@ html .results-page:has(.random-next) { box-shadow:none; }
  .next-daily { font-size:7px; flex-wrap:wrap; }
  .next-daily .text-button { font-size:8px; }
 }
+
+/* Multiplayer uses the same arcade tokens, with an independently scrolling arena. */
+main[data-mabar='on'] { display:block; overflow:auto; padding-block:20px; scroll-padding-block:16px; }
+.play-tabs { display:flex; gap:12px; justify-content:center; flex-shrink:0; margin-bottom:20px; }
+.play-tabs button { border:1px solid var(--line); padding:12px; color:var(--purple); background:var(--canvas); font-size:11px; }
+.play-tabs [aria-pressed='true'] { color:var(--gold); border-color:var(--gold); }
+.mabar-page { width:min(1080px,100%); margin:auto; min-width:0; font-size:11px; line-height:1.8; padding:8px; }
+.mabar-page[hidden] { display:none; }
+.mabar-page h1 { font-size:clamp(18px,3vw,30px); line-height:1.5; overflow-wrap:anywhere; }
+.mabar-page h2 { font-size:16px; line-height:1.7; }
+.mabar-page h3 { font-size:12px; line-height:1.8; }
+.mabar-page input,.mabar-page select { font:inherit; font-size:16px; min-width:0; width:100%; background:var(--canvas); border:1px solid var(--purple); color:var(--ink); padding:12px 8px; border-radius:0; }
+.mabar-page input[type='file'] { font-size:10px; }
+.mabar-page button { font:inherit; min-height:40px; padding:10px 12px; border:1px solid var(--line); background:var(--canvas); color:var(--gold); overflow-wrap:anywhere; }
+.mabar-page button.primary-button { color:var(--canvas); background:var(--gold); }
+.mabar-page button:disabled { opacity:.45; cursor:not-allowed; }
+.mabar-page label { display:flex; flex-direction:column; gap:8px; min-width:0; }
+.mabar-heading,.mabar-toolbar,.mabar-profile,.draw-tools { display:flex; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:20px; }
+.mabar-heading h1 { flex:1; }
+.mabar-toolbar label,.mabar-profile label { flex:1 1 180px; }
+.mabar-settings { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-block:20px; padding:16px; border:1px solid var(--purple); }
+.mabar-settings p { grid-column:1/-1; }
+.room-list { display:grid; gap:12px; }
+.room-list-row { display:grid; grid-template-columns:1fr 1fr auto; align-items:center; text-align:left; gap:16px; }
+.room-list-row strong { overflow-wrap:anywhere; color:var(--green); }
+.mabar-columns { display:grid; grid-template-columns:minmax(0,1fr) 260px; gap:24px; }
+.mabar-arena { min-width:0; border-block:2px dotted var(--gold); padding-block:24px; }
+.mabar-arena>button { margin:8px; }
+.mabar-prompt { color:var(--gold); margin-block:12px 24px; overflow-wrap:anywhere; }
+.mabar-answer { display:flex; align-items:end; gap:12px; margin-block:24px; }
+.mabar-answer label { flex:1; }
+.mabar-players { min-width:0; }
+.mabar-player { display:flex; align-items:center; gap:10px; border-bottom:1px dotted var(--line); padding:12px 0; flex-wrap:wrap; }
+.mabar-player>span:not(.mabar-avatar) { flex:1; min-width:0; overflow-wrap:anywhere; }
+.mabar-player small { display:block; font-size:9px; color:var(--muted); }
+.mabar-player details { width:100%; }
+.mabar-player details button { font-size:9px; }
+.mabar-avatar { display:inline-flex; width:36px; height:36px; flex:none; object-fit:cover; image-rendering:auto; border:1px solid var(--purple); }
+.pixel-avatar { align-items:center; justify-content:center; color:var(--green); background:var(--canvas); }
+.mabar-podium { list-style:none; padding:0; }
+.mabar-podium li { display:flex; align-items:center; gap:12px; border-bottom:1px dotted var(--line); padding:10px 0; }
+.mabar-podium li span:not(.mabar-avatar) { flex:1; min-width:0; overflow-wrap:anywhere; }
+.mabar-chat { margin-top:24px; border-top:2px dotted var(--purple); padding-top:16px; }
+.mabar-chat [role='log'] { max-height:180px; overflow:auto; overflow-wrap:anywhere; }
+.mabar-chat form { display:flex; gap:12px; }
+.canvas-slot { width:100%; aspect-ratio:8/5; background:white; }
+.drawing-preview { display:block; width:100%; height:auto; max-width:800px; background:white; }
+.draw-tools { font-size:9px; gap:8px; }
+.draw-tools select { font-size:12px; }
+.chain-gallery { padding:16px 0; border-bottom:2px dotted var(--line); }
+.chain-gallery>div { margin-block:16px; }
+.chain-word { color:var(--green); font-size:20px; overflow-wrap:anywhere; }
+.mabar-mini { display:flex; flex-direction:column; justify-content:center; align-items:center; gap:8px; height:100%; font-size:10px; padding:8px; text-align:center; }
+.mabar-mini small { font-size:7px; line-height:1.6; }
+@media(max-width:700px) {
+ .mabar-columns { grid-template-columns:minmax(0,1fr); }
+ .mabar-player { padding:8px 0; }
+ .mabar-heading { gap:8px; }
+ .mabar-heading h1 { flex-basis:100%; }
+ .room-list-row { grid-template-columns:1fr; gap:8px; }
+ .mabar-settings { padding:12px 8px; gap:12px; }
+ .mabar-page { padding:0; }
+ .mabar-toolbar { gap:10px; }
+ .mabar-answer { gap:8px; }
+}
+@media(max-width:360px) { .mabar-settings { grid-template-columns:minmax(0,1fr); } }
+.mabar-chat input { flex:1; min-width:0; width:auto; }
+.mabar-chat button,.mabar-answer button { flex-shrink:0; white-space:nowrap; }
+.mabar-page button[aria-pressed='true'] { color:var(--green); border-color:var(--green); }
+.mabar-heading h1 { color:var(--gold); }

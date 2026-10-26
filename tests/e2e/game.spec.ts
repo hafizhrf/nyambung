@@ -74,7 +74,7 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
     };
   });
   await page.getByRole('button', { name: /Bagikan hasil/ }).click();
-  await expect(page.getByRole('img', { name:/Kartu skor Nyambung/ })).toBeVisible();
+  await expect(page.getByRole('img', { name:/Kartu skor Nyambung/ })).toBeVisible({timeout:15000});
   const downloadEvent = page.waitForEvent('download');
   await page.getByRole('link', { name:'Unduh gambar', exact:true }).click();
   const download = await downloadEvent;

@@ -129,6 +129,14 @@ export function openDatabase(path = process.env.DATABASE_PATH || resolve(import.
     }
     sqlite.exec('INSERT INTO migrations(version) VALUES (9)');
   }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 10').get()) return;
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS mabar_profiles (player_id TEXT PRIMARY KEY REFERENCES players(id), name TEXT NOT NULL, avatar TEXT);
+      CREATE TABLE IF NOT EXISTS mabar_rooms (id TEXT PRIMARY KEY, discord_key TEXT UNIQUE, state TEXT NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mabar_matches (id TEXT PRIMARY KEY, room_id TEXT NOT NULL REFERENCES mabar_rooms(id), state TEXT NOT NULL, completed_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS mabar_commands (room_id TEXT NOT NULL REFERENCES mabar_rooms(id) ON DELETE CASCADE, command_id TEXT NOT NULL, PRIMARY KEY(room_id,command_id));
+      INSERT INTO migrations(version) VALUES (10);`);
+  }).immediate();
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 export type Store = ReturnType<typeof openDatabase>;

@@ -11,3 +11,7 @@ export async function api<T>(path: string, body?: unknown, retried = false): Pro
   if (!response.ok) throw new Error(data.error || 'Koneksi sedang terganggu. Coba lagi, ya.');
   return data as T;
 }
+export async function uploadAvatar(file:File|null):Promise<import('@nyambung/shared').GuestProfile>{
+ const response=await fetch(`${apiBase()}/mabar/avatar`,{method:'POST',credentials:'same-origin',headers:token?{Authorization:`Bearer ${token}`}:{},body:file??new Uint8Array()});
+ const data=await response.json();if(!response.ok)throw new Error(data.error);return data;
+}

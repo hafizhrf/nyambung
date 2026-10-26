@@ -1,3 +1,5 @@
+import { registerMabar } from './mabar-http.js';
+import { MabarError, type MabarService } from './mabar.js';
 import { Hono } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { bodyLimit } from 'hono/body-limit';
@@ -9,7 +11,7 @@ import { wibDate, nextReset } from './time.js';
 import type { Store } from './db.js';
 import { createDiscordService, discordConfig, DiscordError, DiscordHttpError, type DiscordService, type DiscordSession } from './discord.js';
 import { createDiscordBot } from './discord-reminders.js';
-export function createApp(store: Store, clock: () => Date = () => new Date(), integrations?: { discord?: DiscordService; bot?: ReturnType<typeof createDiscordBot> }) {
+export function createApp(store: Store, clock: () => Date = () => new Date(), integrations?: { mabar?: MabarService; discord?: DiscordService; bot?: ReturnType<typeof createDiscordBot> }) {
   const config = integrations?.discord?.config ?? discordConfig();
   const discord = integrations?.discord ?? (config ? createDiscordService(store, config, clock) : undefined);
   const bot = integrations?.bot ?? (discord ? createDiscordBot(store, discord, clock) : undefined);
@@ -41,7 +43,7 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
       if (origin && origin !== allowedOrigin && !localDevOrigin && !discordOrigin) return c.json({ error: 'Origin tidak diizinkan.' }, 403);
       if (c.req.path === '/api/discord/auth' && !origin) return c.json({ error: 'Origin diperlukan.' }, 403);
     }
-    if (c.req.path === '/api/discord/bootstrap' || c.req.path === '/api/discord/auth') { await next(); return; }
+    if (c.req.path === '/api/mabar/config' || c.req.path === '/api/discord/bootstrap' || c.req.path === '/api/discord/auth') { await next(); return; }
     const bearer = c.req.header('authorization');
     if (bearer) {
       if (!discord) throw new DiscordError('Discord belum diaktifkan.', 401);
@@ -67,7 +69,8 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
     }
     await next();
   });
-  app.use('/api/*', (c, next) => bodyLimit({ maxSize: c.req.path === '/api/discord/auth' ? 4096 : 1024, onError: c => c.json({ error: 'Permintaan terlalu besar.' }, 413) })(c, next));
+  app.use('/api/*', (c, next) => bodyLimit({ maxSize: c.req.path === '/api/mabar/avatar' ? 2097152 : c.req.path.startsWith('/api/mabar/') ? 8192 : c.req.path === '/api/discord/auth' ? 4096 : 1024, onError: c => c.json({ error: 'Permintaan terlalu besar.' }, 413) })(c, next));
+  registerMabar(app, integrations?.mabar, store, discord);
   app.get('/api/discord/bootstrap', c => {
     if (!discord) return c.json({ error: 'Discord belum diaktifkan.' }, 404);
     return c.json(discord.bootstrap());
@@ -113,6 +116,8 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
   app.get('/api/me/stats', c => c.json(service.stats(c.get('playerId'))));
   app.notFound(c => c.json({ error: 'Halaman tidak ditemukan.' }, 404));
   app.onError((error, c) => {
+    if (error instanceof MabarError) return c.json({error:error.message},error.status as 400);
+    if (error instanceof Error && error.name === 'ZodError') return c.json({error:'Data tidak valid.'},400);
     if (error instanceof DiscordError) { if (error.status === 429) c.header('Retry-After', String(error.retryAfter)); return c.json({ error: error.message }, error.status); }
     if (error instanceof DiscordHttpError) return c.json({ error: 'Discord belum bisa dihubungi. Coba sebentar lagi.' }, 503);
     if (error instanceof GameError) return c.json({ error: error.message }, error.status);

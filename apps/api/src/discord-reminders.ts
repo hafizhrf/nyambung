@@ -1,3 +1,4 @@
+import type { MabarService } from './mabar.js';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { Store } from './db.js';
@@ -27,8 +28,8 @@ export function reminderMessage(date: string, number: number, test = false) {
 interface Reminder { guild_id: string; channel_id: string; enabled: number; last_error: string | null }
 interface Delivery { guild_id: string; date: string; channel_id: string; status: string; attempts: number }
 interface Message { id: string; author: { id: string }; components?: { components?: { custom_id?: string }[] }[] }
-export function createDiscordBot(store: Store, discord: DiscordService, clock: () => Date = () => new Date()) {
-  const bots=new Map(discordGuildIds(discord.config).map(guildId=>[guildId,createGuildDiscordBot(store,{...discord,config:{...discord.config,guildId,guildIds:[guildId]}},clock)]));
+export function createDiscordBot(store: Store, discord: DiscordService, clock: () => Date = () => new Date(), mabar?:MabarService) {
+  const bots=new Map(discordGuildIds(discord.config).map(guildId=>[guildId,createGuildDiscordBot(store,{...discord,config:{...discord.config,guildId,guildIds:[guildId]}},clock,mabar)]));
   const first=bots.values().next().value!;
   return {
     handle:(input:unknown)=>{const parsed=interaction.safeParse(input);return (parsed.success&&parsed.data.guild_id?bots.get(parsed.data.guild_id)??first:first).handle(input);},
@@ -38,9 +39,9 @@ export function createDiscordBot(store: Store, discord: DiscordService, clock: (
     drain:async()=>{await Promise.all([...bots.values()].map(bot=>bot.drain()));},
   };
 }
-function createGuildDiscordBot(store: Store, discord: DiscordService, clock: () => Date) {
+function createGuildDiscordBot(store: Store, discord: DiscordService, clock: () => Date, mabar?:MabarService) {
   const { client, config } = discord;
-  const reports = createDiscordReports(store, discord, clock);
+  const reports = createDiscordReports(store, discord, clock, mabar);
   const tasks = new Set<Promise<void>>();
   let ticking = false;
   const botId = () => client.request<{ id: string }>('/users/@me');

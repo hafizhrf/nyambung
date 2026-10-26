@@ -96,6 +96,20 @@ it('repairs a v5 database missing Discord interaction cache while preserving ide
   } finally { if (store.sqlite.open) store.sqlite.close(); rmSync(temp, { recursive:true, force:true }); }
 });
 
+it('repairs early mabar installations that predate command de-duplication',()=>{
+  const temp=mkdtempSync(join(tmpdir(),'nyambung-mabar-migration-'));const path=join(temp,'existing.sqlite');
+  let store=openDatabase(path);
+  try{
+    store.sqlite.exec('DROP TABLE mabar_commands;DELETE FROM migrations WHERE version>=11;');
+    store.sqlite.close();store=openDatabase(path);
+    store.sqlite.prepare('INSERT INTO mabar_rooms VALUES (?,?,?,?)').run('room-one',null,'{}',1);
+    store.sqlite.prepare('INSERT INTO mabar_commands VALUES (?,?)').run('room-one','command-one');
+    store.sqlite.prepare('DELETE FROM mabar_rooms WHERE id=?').run('room-one');
+    expect(store.sqlite.prepare('SELECT count(*) AS n FROM mabar_commands').get()).toEqual({n:0});
+    expect(store.sqlite.prepare('SELECT version FROM migrations WHERE version = 11').get()).toEqual({version:11});
+  }finally{if(store.sqlite.open)store.sqlite.close();rmSync(temp,{recursive:true,force:true});}
+});
+
 it('reuses the latest existing live message when migrating to one card per channel',()=>{
   const temp=mkdtempSync(join(tmpdir(),'nyambung-card-migration-'));const path=join(temp,'existing.sqlite');
   let store=openDatabase(path);

@@ -17,10 +17,9 @@ import {
   type ChainEntry,
   type MatchView,
 } from "@nyambung/shared";
-import { quickQuestions } from "../../../content/mabar-questions.js";
 import lexicon from "../../../content/lexicon.json";
 import type { Store } from "./db.js";
-import type { PublishedStage, Snapshot } from "./scoring.js";
+import { createRoundSource, RoundError, type RoundRef } from "./mabar-rounds.js";
 export class MabarError extends Error {
   constructor(
     message: string,
@@ -41,6 +40,7 @@ type Answer = {
   playerId: string;
   word: string;
   score: number;
+  quality?: number;
   connections?: number[];
 };
 interface Match {
@@ -55,8 +55,10 @@ interface Match {
   scores: Record<string, number>;
   answers: Answer[];
   history: Answer[][];
-  questions: typeof quickQuestions;
-  stages: { version: string; index: number }[];
+  /** Tebak Cepat rounds drawn from the Mode Acak bank, plus the revealed answer. */
+  stages: RoundRef[];
+  best?: string;
+  explanation?: string;
   chains: ChainEntry[][];
   drafts: Record<string, ChainEntry>;
   locked: string[];
@@ -65,6 +67,10 @@ interface Match {
   lastWord: string;
   used: string[];
   lastAttempts: Record<string, number>;
+  /** Sambung Kata elimination: whose turn it is, the round and who is out. */
+  turn?: string;
+  round?: number;
+  eliminated?: string[];
 }
 interface Room {
   id: string;
@@ -115,19 +121,24 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
     >(),
     rates = new Map<string, { at: number; n: number }>();
   const roomCache = new Map<string, Room>();
-  const snapshotCache = new Map<string, Snapshot>();
-  function published(ref: { version: string; index: number }) {
-    let snapshot = snapshotCache.get(ref.version);
-    if (!snapshot) {
-      const row = sql
-        .prepare("SELECT snapshot FROM puzzle_versions WHERE id=?")
-        .get(ref.version) as { snapshot: string };
-      snapshot = JSON.parse(row.snapshot);
-      if (snapshotCache.size >= 2)
-        snapshotCache.delete(snapshotCache.keys().next().value!);
-      snapshotCache.set(ref.version, snapshot!);
+  const rounds = createRoundSource(store);
+  /** Round errors surface to players with the same status as room errors. */
+  function scored<T>(fn: () => T): T {
+    try {
+      return fn();
+    } catch (e) {
+      if (e instanceof RoundError) throw new MabarError(e.message, e.status);
+      throw e;
     }
-    return snapshot!.stages[ref.index];
+  }
+  /** Evaluates a Tebak Cepat round before players answer it. */
+  function prepare(m: Match) {
+    if (m.mode !== "quick") return;
+    try {
+      rounds.stage(m.stages[m.stage]);
+    } catch (e) {
+      console.error("Mabar round evaluation failed", e);
+    }
   }
   const listeners = new Set<(id: string) => void>();
   const rows = () =>
@@ -143,6 +154,16 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
   }
   function emit(r: Room) {
     for (const cb of listeners) cb(r.id);
+  }
+  function remove(r: Room) {
+    sql
+      .transaction(() => {
+        sql.prepare("DELETE FROM mabar_matches WHERE room_id=?").run(r.id);
+        sql.prepare("DELETE FROM mabar_rooms WHERE id=?").run(r.id);
+      })
+      .immediate();
+    roomCache.delete(r.id);
+    emit(r);
   }
   function get(id: string): Room {
     const row = sql
@@ -179,14 +200,13 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
   function settings(input: unknown) {
     const raw = z
       .object({
-        mode: z.enum(["chain", "quick", "semantic", "word"]).default("quick"),
+        mode: z.enum(["chain", "quick", "word"]).default("quick"),
       })
       .passthrough()
       .parse(input);
     const defaults = {
       chain: [1, 30],
       quick: [10, 20],
-      semantic: [5, 30],
       word: [3, 10],
     }[raw.mode];
     const s = roomSettings.parse({
@@ -202,12 +222,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
             [5, 10, 15],
             [15, 20, 30],
           ]
-        : s.mode === "semantic"
-          ? [
-              [5, 10],
-              [20, 30, 45],
-            ]
-          : s.mode === "word"
+        : s.mode === "word"
             ? [
                 [3, 5, 7],
                 [7, 10, 15],
@@ -295,6 +310,8 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       .filter(
         (r) =>
           r.source === "web" &&
+          // Rooms whose players all closed the page are not worth joining.
+          r.members.some((p) => p.disconnected === null) &&
           r.settings.visibility === "public" &&
           r.settings.name
             .toLocaleLowerCase()
@@ -399,11 +416,23 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
           .sort((a, b) => a.joined - b.joined)[0]?.id ??
         r.members[0]?.id ??
         "";
+    // Web rooms close with their last member; Discord lobbies follow the Activity.
+    if (!r.members.length && r.source === "web") {
+      remove(r);
+      return;
+    }
     if (!r.members.length) r.emptySince = clock();
     save(r);
     emit(r);
   }
+  // Sambung Kata turns shrink by a second each round, down to five seconds.
+  const minimumTurn = 5;
   function duration(r: Room, m: Match) {
+    if (m.mode === "word")
+      return Math.max(
+        Math.min(minimumTurn, r.settings.seconds),
+        r.settings.seconds - ((m.round ?? 1) - 1),
+      );
     return m.mode === "chain"
       ? m.stage % 2 === 1
         ? { fast: 40, normal: 60, relaxed: 90 }[r.settings.pace]
@@ -417,50 +446,25 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       players.some((p) => !p.ready || p.disconnected !== null)
     )
       throw new MabarError("Tunggu semua pemain siap.");
-    const stages: { version: string; index: number }[] = [];
-    if (r.settings.mode === "semantic") {
-      const snapshots = sql
-        .prepare(
-          "SELECT DISTINCT v.id,v.snapshot FROM random_pool p JOIN puzzle_versions v ON p.version_id=v.id",
-        )
-        .all() as { id: string; snapshot: string }[];
-      for (const row of snapshots) {
-        const snapshot = JSON.parse(row.snapshot) as Snapshot;
-        for (let index = 0; index < snapshot.stages.length; index++)
-          stages.push({ version: row.id, index });
-      }
-      if (!stages.length)
-        throw new MabarError("Paket Acak belum tersedia.", 409);
-    }
-
+    const mode = r.settings.mode,
+      stages = mode === "quick" ? scored(() => rounds.pick(r.settings.rounds)) : [];
     for (const p of r.members) p.score = 0;
-    const order = shuffled(players.map((p) => p.id)),
-      mode = r.settings.mode;
+    const order = shuffled(players.map((p) => p.id));
     r.match = {
       id: randomUUID(),
       mode,
       phase: "countdown",
       stage: 0,
+      // Sambung Kata ends by elimination, so it has no fixed number of turns.
       total:
-        mode === "chain"
-          ? order.length
-          : mode === "word"
-            ? r.settings.rounds * order.length
-            : r.settings.rounds,
+        mode === "chain" ? order.length : mode === "word" ? 0 : r.settings.rounds,
       deadline: clock() + 3000,
       started: clock(),
       order,
       scores: Object.fromEntries(order.map((id) => [id, 0])),
       answers: [],
       history: [],
-      questions: shuffled(quickQuestions).slice(0, r.settings.rounds),
-      stages:
-        mode === "semantic"
-          ? Array.from(
-              { length: r.settings.rounds },
-              (_, n) => stages[n % stages.length],
-            )
-          : [],
+      stages,
       chains: order.map(() => []),
       drafts: {},
       locked: [],
@@ -469,6 +473,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       lastWord: "rumah",
       used: ["rumah"],
       lastAttempts: {},
+      ...(mode === "word" ? { turn: order[0], round: 1, eliminated: [] } : {}),
     };
     r.notice = "";
   }
@@ -477,6 +482,26 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
   }
   function lastEntry(m: Match, index: number) {
     return [...m.chains[index]].reverse().find((e) => !e.skipped);
+  }
+  const survivors = (m: Match) =>
+    m.order.filter((id) => !m.eliminated?.includes(id));
+  /** Passes the Sambung Kata turn to the next surviving player in order. */
+  function nextTurn(r: Room) {
+    const m = r.match!,
+      n = m.order.length,
+      from = m.order.indexOf(m.turn!);
+    for (let k = 1; k <= n; k++) {
+      const id = m.order[(from + k) % n];
+      if (m.eliminated!.includes(id)) continue;
+      if (from + k >= n) m.round = (m.round ?? 1) + 1;
+      m.turn = id;
+      break;
+    }
+    m.stage++;
+    m.answers = [];
+    m.phase = "playing";
+    m.started = clock();
+    m.deadline = clock() + duration(r, m) * 1000;
   }
   function finish(r: Room) {
     const m = r.match!;
@@ -523,27 +548,55 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
     }
     m.history.push(m.answers);
     m.phase = "reveal";
-    m.deadline = clock() + 5000;
+    m.deadline = clock() + 6000;
+    try {
+      const stage = rounds.stage(m.stages[m.stage]);
+      m.best = stage.best;
+      m.explanation = stage.explanation;
+    } catch {
+      m.best = undefined;
+      m.explanation = undefined;
+    }
     for (const a of m.answers)
       m.scores[a.playerId] = (m.scores[a.playerId] ?? 0) + a.score;
     for (const p of r.members) p.score = m.scores[p.id] ?? 0;
   }
+  // The last surviving player earns a bonus so the winner always ranks first.
+  const survivorBonus = 500;
   function advance(r: Room) {
     const m = r.match!;
     if (m.phase === "countdown") {
       m.phase = "playing";
       m.started = clock();
       m.deadline = clock() + duration(r, m) * 1000;
+      prepare(m);
       return;
     }
     if (m.phase === "playing") {
+      if (m.mode === "word") {
+        // Running out of time is elimination.
+        m.eliminated!.push(m.turn!);
+        m.phase = "reveal";
+        m.deadline = clock() + 3000;
+        return;
+      }
       completeStage(r);
       return;
     }
     if (m.phase === "reveal") {
+      if (m.mode === "word") {
+        const alive = survivors(m);
+        if (alive.length <= 1) {
+          if (alive[0]) m.scores[alive[0]] = (m.scores[alive[0]] ?? 0) + survivorBonus;
+          finish(r);
+        } else nextTurn(r);
+        return;
+      }
       m.stage++;
       m.answers = [];
       m.lastAttempts = {};
+      m.best = undefined;
+      m.explanation = undefined;
       if (m.stage >= m.total) {
         finish(r);
         return;
@@ -551,6 +604,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       m.phase = "playing";
       m.started = clock();
       m.deadline = clock() + duration(r, m) * 1000;
+      prepare(m);
       return;
     }
     if (m.phase === "gallery") {
@@ -579,22 +633,22 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
         stage: m.stage,
         total: m.total,
         deadline: m.deadline,
-        prompt:
-          m.mode === "quick" && m.phase !== "countdown"
-            ? m.questions[Math.min(m.stage, m.questions.length - 1)].prompt
-            : m.mode === "word"
-              ? m.lastWord
-              : "",
+        prompt: m.mode === "word" ? m.lastWord : "",
         submitted:
           m.locked.includes(i.id) || m.answers.some((a) => a.playerId === i.id),
-        ...(m.mode === "semantic" && m.phase !== "countdown"
-          ? {
-              clues: published(m.stages[Math.min(m.stage, m.stages.length - 1)])
-                .clues,
-            }
+        ...(m.mode === "quick" && m.phase !== "countdown" && m.stages.length
+          ? (({ kind, clues }) => ({ kind, clues }))(
+              m.stages[Math.min(m.stage, m.stages.length - 1)],
+            )
           : {}),
         ...(m.mode === "word"
-          ? { turn: m.order[m.stage % m.order.length] }
+          ? {
+              turn: m.turn,
+              round: m.round,
+              eliminated: m.eliminated,
+              turnSeconds: duration(r, m),
+              used: m.used.slice(-12),
+            }
           : {}),
       };
       if (m.mode === "chain" && active && m.phase === "playing") {
@@ -614,14 +668,13 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       }
       if (m.phase === "reveal" || m.phase === "results")
         match.reveal = {
-          answer:
-            m.mode === "quick"
-              ? m.questions[Math.min(m.stage, m.questions.length - 1)]
-                  .answers[0]
-              : m.mode === "semantic"
-                ? published(m.stages[Math.min(m.stage, m.stages.length - 1)])
-                    .best
-                : m.lastWord,
+          answer: m.mode === "quick" ? (m.best ?? "") : m.lastWord,
+          ...(m.mode === "quick" && m.explanation
+            ? { explanation: m.explanation }
+            : {}),
+          ...(m.mode === "word" && m.phase === "reveal"
+            ? { eliminated: m.eliminated?.at(-1) }
+            : {}),
           answers: m.phase === "results" ? m.history.flat() : m.answers,
         };
     }
@@ -745,62 +798,62 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
               throw new MabarError("Kamu sedang menonton.", 403);
             if (m.answers.some((a) => a.playerId === i.id))
               throw new MabarError("Jawaban sudah terkunci.", 409);
-            const word = clean(
-              z.string().trim().min(1).max(80).parse(cmd.payload),
-            );
-            let score = 0;
-            let connections: number[] | undefined;
+            const raw = z.string().trim().min(1).max(80).parse(cmd.payload);
             if (m.mode === "quick") {
-              limit("guess:" + i.id, 1, 1000);
-              if (!m.questions[m.stage].answers.map(clean).includes(word)) {
-                throw new MabarError("Belum tepat.");
-              }
-              const elapsed = Math.floor((clock() - m.started) / 100) * 100;
-              score =
-                1000 -
-                Math.min(
-                  500,
-                  Math.floor((500 * elapsed) / (r.settings.seconds * 1000)),
-                );
-            } else if (m.mode === "semantic") {
-              const stage = published(m.stages[m.stage]);
-              const entry = Object.hasOwn(stage.scores, word)
-                ? stage.scores[word]
-                : undefined;
-              if (!entry) throw new MabarError("Kata belum ada di kamus.");
-              score = entry.score;
-              connections = entry.connections;
-            } else if (m.mode === "word") {
-              if (m.order[m.stage % m.order.length] !== i.id)
-                throw new MabarError("Belum giliranmu.", 403);
-              if (!/^[a-z]+$/.test(word) || !dictionary.has(word))
-                throw new MabarError("Kata belum ada di kamus.");
-              if (
-                !word.startsWith(m.lastWord.slice(-1)) ||
-                m.used.includes(word)
+              limit("guess:" + i.id, 3, 1000);
+              const { word, entry } = scored(() =>
+                rounds.score(m.stages[m.stage], raw),
+              );
+              // Meaning sets the base score; answering later keeps at least half.
+              const late = Math.min(
+                1,
+                (clock() - m.started) / (r.settings.seconds * 1000),
+              );
+              m.answers.push({
+                playerId: i.id,
+                word,
+                quality: entry.score,
+                connections: entry.connections,
+                score: Math.round(entry.score * (1 - 0.5 * late)),
+              });
+              const present = m.order.filter((id) =>
+                r.members.some((v) => v.id === id && !v.spectator),
+              );
+              if (present.every((id) => m.answers.some((a) => a.playerId === id)))
+                completeStage(r);
+              break;
+            }
+            if (m.mode !== "word")
+              throw new MabarError("Mode tidak menerima jawaban ini.");
+            if (m.eliminated?.includes(i.id))
+              throw new MabarError("Kamu sudah gugur.", 403);
+            if (m.turn !== i.id) throw new MabarError("Belum giliranmu.", 403);
+            const word = clean(raw);
+            if (!/^[a-z]+$/.test(word) || !dictionary.has(word))
+              throw new MabarError("Kata belum ada di kamus.");
+            if (!word.startsWith(m.lastWord.slice(-1)))
+              throw new MabarError(
+                `Kata harus diawali huruf ${m.lastWord.slice(-1).toUpperCase()}.`,
+              );
+            if (m.used.includes(word))
+              throw new MabarError("Kata itu sudah dipakai di permainan ini.");
+            m.used.push(word);
+            m.lastWord = word;
+            const tail = word.slice(-1);
+            if (
+              ![...dictionary].some(
+                (w) => w.startsWith(tail) && !m.used.includes(w),
               )
-                throw new MabarError(
-                  "Huruf awal salah atau kata sudah dipakai.",
-                );
-              score = 100;
-              m.used.push(word);
-              m.lastWord = word;
-              const tail = word.slice(-1);
-              if (
-                ![...dictionary].some(
-                  (w) => w.startsWith(tail) && !m.used.includes(w),
-                )
-              ) {
-                m.lastWord = "rumah";
-                if (m.used.includes("rumah"))
-                  m.lastWord = [...dictionary].find(
-                    (w) => !m.used.includes(w),
-                  )!;
-                m.used.push(m.lastWord);
-              }
-            } else throw new MabarError("Mode tidak menerima jawaban ini.");
-            m.answers.push({ playerId: i.id, word, score, connections });
-            if (m.mode === "word") completeStage(r);
+            ) {
+              m.lastWord = "rumah";
+              if (m.used.includes("rumah"))
+                m.lastWord = [...dictionary].find((w) => !m.used.includes(w))!;
+              m.used.push(m.lastWord);
+            }
+            m.scores[i.id] = (m.scores[i.id] ?? 0) + 100;
+            m.history.push([{ playerId: i.id, word, score: 100 }]);
+            for (const v of r.members) v.score = m.scores[v.id] ?? 0;
+            nextTurn(r);
             break;
           }
           case "draft":
@@ -869,6 +922,10 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
   // A process restart invalidates active timers without awarding a winner.
   for (const row of rows()) {
     const r = JSON.parse(row.state) as Room;
+    // Nyambung Bareng was folded into Tebak Cepat.
+    if ((r.settings.mode as string) === "semantic")
+      Object.assign(r.settings, { mode: "quick", rounds: 10, seconds: 20 });
+    if ((r.match?.mode as string) === "semantic") r.match = null;
     if (r.match && r.match.phase !== "results") {
       r.match = null;
       r.notice =
@@ -908,10 +965,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
           changed = true;
         }
         if (r.source === "web" && clock() - r.emptySince >= 900000) {
-          sql.prepare("DELETE FROM mabar_matches WHERE room_id=?").run(r.id);
-          sql.prepare("DELETE FROM mabar_rooms WHERE id=?").run(r.id);
-          roomCache.delete(r.id);
-          for (const cb of listeners) cb(r.id);
+          remove(r);
           continue;
         }
       } else if (r.emptySince !== null) {
@@ -981,7 +1035,11 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       name: found.settings.name,
       mode: found.settings.mode,
       phase: found.match?.phase ?? "lobby",
-      stage: found.match?.stage ?? 0,
+      // Sambung Kata has no fixed length: report its round with total 0.
+      stage:
+        found.match?.mode === "word"
+          ? (found.match.round ?? 1) - 1
+          : (found.match?.stage ?? 0),
       total: found.match?.total ?? 0,
       players: found.members.map((p) => {
         const identity = sql
@@ -1014,14 +1072,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       if (await alive(r.discordKey!.split(":")[1])) continue;
       const fresh = get(r.id);
       if (fresh.members.some((p) => p.disconnected === null)) continue;
-      sql
-        .transaction(() => {
-          sql.prepare("DELETE FROM mabar_matches WHERE room_id=?").run(r.id);
-          sql.prepare("DELETE FROM mabar_rooms WHERE id=?").run(r.id);
-        })
-        .immediate();
-      roomCache.delete(r.id);
-      emit(r);
+      remove(r);
     }
   }
   return {

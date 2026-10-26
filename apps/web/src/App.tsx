@@ -246,6 +246,21 @@ export default function App() {
     const ctx = enterPage(target,page);
     return () => ctx.revert();
   }, [page, active, motion, activityStep, compactActivity, mabarActive]);
+  // Center the stage card once per stage and viewport. A result then grows the
+  // card downward so the board never jumps; it only moves up when it must fit.
+  useLayoutEffect(() => {
+    const host = main.current, card = host?.querySelector<HTMLElement>('.game-page');
+    if (!host || !card) return;
+    let offset = 0;
+    const room = () => { const style = getComputedStyle(host); return host.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom); };
+    const height = () => card.getBoundingClientRect().height;
+    const apply = (value: number) => { offset = Math.max(0, Math.floor(value)); card.style.setProperty('--game-offset', `${offset}px`); };
+    const center = () => apply((room() - height()) / 2);
+    center();
+    const viewport = new ResizeObserver(center), fit = new ResizeObserver(() => { if (offset + height() > room()) apply(room() - height()); });
+    viewport.observe(host); fit.observe(card);
+    return () => { viewport.disconnect(); fit.disconnect(); };
+  }, [page, active, mabarActive, run?.id]);
   useEffect(() => {
     setError('');
     try { setWord(draftKey ? localStorage.getItem(draftKey) || '' : ''); } catch { setWord(''); }
@@ -326,10 +341,9 @@ export default function App() {
     const button = (event.target as HTMLElement).closest('button');
     if (button && !button.disabled && !(button.form && button.type === 'submit') && !button.hasAttribute('data-custom-sound')) sound.play('tap');
   }}>
-    <header className="site-header"><button className="brand" onClick={()=>{setMabarActive(false);goHome();}} aria-label="Nyambung, beranda"><span className="brand-icon"><PixelIcon name="link"/></span>nyambung<span className="brand-period">.</span></button><nav aria-label="Menu utama">{platform.kind === 'discord' && !openingActivity && !mabarActive && <DiscordRoom ready={platformReady} revision={run?.results.length ?? 0} runId={run?.id}/>}<button className="icon-button" onClick={() => setModal('help')} aria-label="Cara bermain"><QuestionMarkCircledIcon width={21} height={21} aria-hidden="true"/></button>{!openingActivity && <button className="icon-button" onClick={() => void showStats()} aria-label="Statistik"><BarChartIcon width={21} height={21} aria-hidden="true"/></button>}<button className="icon-button" onClick={()=>setModal('settings')} aria-label="Pengaturan"><SettingsIcon/></button></nav></header>
+    <header className="site-header"><button className="brand" onClick={()=>{setMabarActive(false);goHome();}} aria-label="Nyambung, beranda"><span className="brand-icon"><PixelIcon name="link"/></span>nyambung<span className="brand-period">.</span></button>{mabarEnabled&&!openingActivity&&<nav className="play-tabs" aria-label="Pilihan permainan"><button aria-label="Solo" aria-pressed={!mabarActive} onClick={()=>setMabarActive(false)}><span aria-hidden="true">01</span>Solo</button><button aria-label="Mabar" aria-pressed={mabarActive} onClick={()=>setMabarActive(true)}><span aria-hidden="true">02</span>Mabar</button></nav>}<nav aria-label="Menu utama">{platform.kind === 'discord' && !openingActivity && !mabarActive && <DiscordRoom ready={platformReady} revision={run?.results.length ?? 0} runId={run?.id}/>}<button className="icon-button" onClick={() => setModal('help')} aria-label="Cara bermain"><QuestionMarkCircledIcon width={21} height={21} aria-hidden="true"/></button>{!openingActivity && <button className="icon-button" onClick={() => void showStats()} aria-label="Statistik"><BarChartIcon width={21} height={21} aria-hidden="true"/></button>}<button className="icon-button" onClick={()=>setModal('settings')} aria-label="Pengaturan"><SettingsIcon/></button></nav></header>
     <main data-mabar={mabarActive?'on':undefined} ref={main} id="main-content" tabIndex={-1}>
-      {mabarEnabled&&!openingActivity&&<nav className="play-tabs" aria-label="Pilihan permainan"><button aria-pressed={!mabarActive} onClick={()=>setMabarActive(false)}>Solo</button><button aria-pressed={mabarActive} onClick={()=>setMabarActive(true)}>Mabar</button></nav>}
-      {mabarEnabled&&platformReady&&<Suspense fallback={<p role="status">Memuat mabar…</p>}><Mabar active={mabarActive} compact={compactActivity} onRoom={setMabarRoom}/></Suspense>}
+      {mabarEnabled&&platformReady&&<Suspense fallback={mabarActive?<p role="status" className="mabar-loading">Memuat mabar…</p>:null}><Mabar active={mabarActive} compact={compactActivity} onRoom={setMabarRoom}/></Suspense>}
       {openingActivity && <ActivityLoading step={activityStep === 'game' ? 'game' : activityStep === 'error' ? 'error' : 'auth'} error={loadError} retry={() => void load()}/>}
       {!mabarActive && !openingActivity && page === 'home' && <section className="daily-lobby reveal" aria-labelledby="daily-title">
         <div className="lobby-date-row"><div className="lobby-date">{daily ? dateLabel(daily.date) : 'Memuat…'}</div><button className="archive-trigger" onClick={() => { setError(''); setModal('archive'); }}><CalendarIcon width={14} height={14} aria-hidden="true"/>Arsip Daily</button></div>

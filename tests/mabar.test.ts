@@ -6,7 +6,6 @@ import {
   type MabarService,
   type MabarIdentity,
 } from "../apps/api/src/mabar.js";
-import { quickQuestions } from "../content/mabar-questions.js";
 import { compileRandomPool, publishRandomPool } from "../scripts/content.js";
 import { createApp } from "../apps/api/src/app.js";
 let store: Store, service: MabarService, now: number;
@@ -72,23 +71,33 @@ beforeEach(() => {
     store.sqlite
       .prepare("INSERT INTO players VALUES(?,?)")
       .run(p.id, "2026-10-26");
+  publishRandomPool(store, compileRandomPool(store, true), true);
   service = createMabar(store, () => now);
 });
+/** The published Tebak Cepat stage behind the current round (demo bank). */
+function quickStage(room: string) {
+  const state = JSON.parse(
+    (
+      store.sqlite
+        .prepare("SELECT state FROM mabar_rooms WHERE id=?")
+        .get(room) as { state: string }
+    ).state,
+  );
+  const ref = state.match.stages[state.match.stage];
+  const snapshot = JSON.parse(
+    (
+      store.sqlite
+        .prepare("SELECT snapshot FROM puzzle_versions WHERE id=?")
+        .get(ref.version) as { snapshot: string }
+    ).snapshot,
+  );
+  return { state, stage: snapshot.stages[ref.index] };
+}
 afterEach(() => store.sqlite.close());
 describe("mabar rooms", () => {
-  it("has at least 100 unique reviewed questions with explicit answers", () => {
-    expect(quickQuestions.length).toBeGreaterThanOrEqual(100);
-    expect(new Set(quickQuestions.map((q) => q.prompt)).size).toBe(
-      quickQuestions.length,
-    );
-    expect(
-      quickQuestions.every((q) => q.answers.length && q.answers.every(Boolean)),
-    ).toBe(true);
-  });
   it("applies the correct default preset for each mode", () => {
     for (const [mode, rounds, seconds] of [
       ["quick", 10, 20],
-      ["semantic", 5, 30],
       ["word", 3, 10],
       ["chain", 1, 30],
     ] as const) {
@@ -182,10 +191,26 @@ describe("mabar rooms", () => {
     now += 1000;
     expect(() => service.view(room.id, i)).toThrow("Sesi habis");
   });
-  it("closes empty web rooms after fifteen minutes", () => {
+  it("closes a web room as soon as its last member leaves", () => {
     const room = setup();
     service.leave(room, players[0]);
+    expect(service.list().map((r) => r.id)).toContain(room);
     service.leave(room, players[1]);
+    expect(service.list().map((r) => r.id)).not.toContain(room);
+    expect(() => service.view(room, players[1])).toThrow("ditutup");
+    expect(() => service.join(room, players[1])).toThrow("ditutup");
+  });
+  it("closes disconnected web rooms after fifteen minutes", () => {
+    const room = setup();
+    service.touch(room, players[0], true);
+    service.touch(room, players[1], true);
+    service.tick();
+    // Nobody online: hidden from the public list while it waits to expire.
+    expect(service.list().map((r) => r.id)).not.toContain(room);
+    service.touch(room, players[1]);
+    expect(service.list().map((r) => r.id)).toContain(room);
+    service.touch(room, players[1], true);
+    service.tick();
     now += 900000;
     service.tick();
     expect(() => service.view(room, players[0])).toThrow("ditutup");
@@ -203,30 +228,33 @@ describe("mabar rooms", () => {
   });
 });
 describe("server authoritative matches", () => {
-  it("runs quick rounds, hides answers, rejects late/stale guesses and ranks ties equally", () => {
-    const room = setup();
+  it("draws mixed Mode Acak rounds, hides answers and ends a round once everyone answers", () => {
+    const room = setup("quick");
     let view = start(room);
-    const question = quickQuestions.find(
-      (q) => q.prompt === view.match!.prompt,
-    )!;
-    expect(JSON.stringify(view)).not.toContain('"questions"');
-    cmd(room, players[0], "answer", question.answers[0]);
-    cmd(room, players[1], "answer", question.answers[0]);
+    const { state, stage } = quickStage(room);
+    expect(state.match.stages).toHaveLength(5);
+    expect(new Set(state.match.stages.map((r: { kind: string }) => r.kind))).toEqual(
+      new Set(["bridge2", "bridge3", "closest"]),
+    );
+    expect(view.match!.kind).toBe(stage.kind);
+    expect(view.match!.clues).toEqual(stage.clues);
+    expect(JSON.stringify(view)).not.toContain(`"${stage.best}"`);
+    cmd(room, players[0], "answer", stage.best);
     expect(service.view(room, players[1]).match!.reveal).toBeUndefined();
     const stale = {
       id: randomUUID(),
       type: "answer",
       matchId: view.match!.id,
       stage: 0,
-      payload: question.answers[0],
+      payload: stage.best,
     };
-    deadline(room);
+    cmd(room, players[1], "answer", stage.best);
     view = service.view(room, players[0]);
+    expect(view.match!.phase).toBe("reveal");
+    expect(view.match!.reveal).toMatchObject({ answer: stage.best });
+    expect(view.match!.reveal?.explanation).toBeTruthy();
     expect(view.match!.reveal?.answers).toHaveLength(2);
     expect(view.members[0].rank).toBe(view.members[1].rank);
-    expect(() =>
-      cmd(room, players[0], "answer", question.answers[0]),
-    ).toThrow();
     deadline(room);
     expect(() => service.command(room, players[0], stale)).toThrow("Tahap");
     while (service.view(room, players[0]).match!.phase !== "results")
@@ -235,68 +263,99 @@ describe("server authoritative matches", () => {
       store.sqlite.prepare("SELECT count(*) AS n FROM mabar_matches").get(),
     ).toEqual({ n: 1 });
   });
-  it("rate limits incorrect quick guesses without locking a valid retry", () => {
-    const room = setup();
-    const view = start(room);
-    const answer = quickQuestions.find((q) => q.prompt === view.match!.prompt)!
-      .answers[0];
-    expect(() => cmd(room, players[0], "answer", "salah")).toThrow(
-      "Belum tepat",
-    );
-    expect(() => cmd(room, players[0], "answer", answer)).toThrow("cepat");
-    now += 1000;
-    cmd(room, players[0], "answer", answer);
-    expect(service.view(room, players[0]).match?.submitted).toBe(true);
-  });
-  it("uses published random semantics and does not write solo progress", () => {
-    publishRandomPool(store, compileRandomPool(store, true), true);
-    const room = setup("semantic");
+  it("scores meaning with a speed bonus and lets unknown words be retried", () => {
+    const room = setup("quick");
     start(room);
-    const state = JSON.parse(
+    const { stage } = quickStage(room);
+    expect(() => cmd(room, players[0], "answer", "constructor")).toThrow("kamus");
+    expect(() => cmd(room, players[0], "answer", stage.clues[0])).toThrow(
+      "petunjuk",
+    );
+    now += 10000;
+    cmd(room, players[0], "answer", stage.best);
+    deadline(room);
+    const answer = service.view(room, players[0]).match!.reveal!.answers[0];
+    // Half of the 20 second round has passed: quality 1000 keeps 75%.
+    expect(answer).toMatchObject({ word: stage.best, quality: 1000, score: 750 });
+    expect(
+      store.sqlite.prepare("SELECT count(*) AS n FROM runs").get(),
+    ).toEqual({ n: 0 });
+  });
+  it("keeps quick match state small and moves old Nyambung Bareng rooms to Tebak Cepat", () => {
+    const room = setup("quick");
+    start(room);
+    expect(quickStage(room).state.match.stages[0]).not.toHaveProperty("scores");
+    expect(
       (
         store.sqlite
           .prepare("SELECT state FROM mabar_rooms WHERE id=?")
           .get(room) as { state: string }
-      ).state,
-    );
-    const ref = state.match.stages[0];
-    const snapshot = JSON.parse(
-      (
-        store.sqlite
-          .prepare("SELECT snapshot FROM puzzle_versions WHERE id=?")
-          .get(ref.version) as { snapshot: string }
-      ).snapshot,
-    );
-    const stage = snapshot.stages[ref.index];
-    cmd(room, players[0], "answer", stage.best);
-    expect(() => cmd(room, players[1], "answer", "constructor")).toThrow(
-      "kamus",
-    );
-    deadline(room);
-    expect(service.view(room, players[1]).match!.reveal?.answers[0].score).toBe(
-      stage.scores[stage.best].score,
-    );
-    expect(
-      store.sqlite.prepare("SELECT count(*) AS n FROM runs").get(),
-    ).toEqual({ n: 0 });
-    expect(JSON.stringify(state).length).toBeLessThan(15000);
+      ).state.length,
+    ).toBeLessThan(15000);
+    const legacy = service.create(players[2], { ...opts, name: "Lama" }).id;
+    const row = store.sqlite
+      .prepare("SELECT state FROM mabar_rooms WHERE id=?")
+      .get(legacy) as { state: string };
+    const state = JSON.parse(row.state);
+    state.settings.mode = "semantic";
+    store.sqlite
+      .prepare("UPDATE mabar_rooms SET state=? WHERE id=?")
+      .run(JSON.stringify(state), legacy);
+    service = createMabar(store, () => now);
+    expect(service.view(legacy, players[2]).settings.mode).toBe("quick");
   });
-  it("validates last letters, repeated words, turn ownership and timeout advancement", () => {
+  it("Sambung Kata validates letters, turns and repeated words", () => {
     const room = setup("word");
     let view = start(room);
     const who = players.find((p) => p.id === view.match!.turn)!;
-    const other = players.find((p) => p.id !== who.id)!;
+    const other = players.find((p) => p.id !== who.id && p.id < "p2")!;
+    expect(view.match!.turnSeconds).toBe(10);
     expect(() => cmd(room, other, "answer", "hujan")).toThrow("giliran");
-    expect(() => cmd(room, who, "answer", "nasi")).toThrow("Huruf");
+    expect(() => cmd(room, who, "answer", "nasi")).toThrow("huruf H");
     cmd(room, who, "answer", "hujan");
-    expect(service.view(room, who).match!.phase).toBe("reveal");
+    view = service.view(room, players[0]);
+    // A correct word passes the turn immediately, without a reveal pause.
+    expect(view.match).toMatchObject({ phase: "playing", turn: other.id, prompt: "hujan", round: 1 });
+    cmd(room, other, "answer", "nasi");
+    view = service.view(room, players[0]);
+    expect(view.match).toMatchObject({ turn: who.id, round: 2, turnSeconds: 9 });
+    cmd(room, who, "answer", "ikan");
+    cmd(room, other, "answer", "nanas");
+    cmd(room, who, "answer", "sabun");
+    expect(() => cmd(room, other, "answer", "nasi")).toThrow("sudah dipakai");
+    expect(service.view(room, other).match!.used).toEqual(
+      expect.arrayContaining(["rumah", "hujan", "nasi", "ikan", "nanas", "sabun"]),
+    );
+  });
+  it("Sambung Kata eliminates a player who runs out of time and crowns the survivor", () => {
+    const room = setup("word", 3);
+    let view = start(room, 3);
+    const first = view.match!.turn!;
     deadline(room);
     view = service.view(room, players[0]);
-    expect(view.match!.turn).toBe(other.id);
-    cmd(room, other, "answer", "nasi");
+    expect(view.match).toMatchObject({ phase: "reveal", eliminated: [first] });
+    expect(view.match!.reveal?.eliminated).toBe(first);
+    deadline(room);
+    view = service.view(room, players[0]);
+    expect(view.match!.phase).toBe("playing");
+    const second = view.match!.turn!;
+    expect(second).not.toBe(first);
+    const p = players.find((x) => x.id === second)!;
+    cmd(room, p, "answer", "hujan");
+    view = service.view(room, players[0]);
+    // The eliminated player is skipped when the turn wraps around.
+    expect(view.match!.turn).not.toBe(first);
+    const third = view.match!.turn!;
+    expect(() =>
+      cmd(room, players.find((x) => x.id === first)!, "answer", "nasi"),
+    ).toThrow("gugur");
     deadline(room);
     deadline(room);
-    expect(service.view(room, players[0]).match!.reveal?.answers).toEqual([]);
+    view = service.view(room, players[0]);
+    expect(view.match!.phase).toBe("results");
+    const winner = view.members.find((m) => m.id === second)!;
+    expect(winner).toMatchObject({ rank: 1, score: 600 });
+    expect(view.members.find((m) => m.id === third)!.score).toBe(0);
   });
   for (const count of [3, 4, 12])
     it(`rotates ${count} private chains and completes gallery/voting`, () => {

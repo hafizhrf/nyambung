@@ -137,6 +137,12 @@ export function openDatabase(path = process.env.DATABASE_PATH || resolve(import.
       CREATE TABLE IF NOT EXISTS mabar_commands (room_id TEXT NOT NULL REFERENCES mabar_rooms(id) ON DELETE CASCADE, command_id TEXT NOT NULL, PRIMARY KEY(room_id,command_id));
       INSERT INTO migrations(version) VALUES (10);`);
   }).immediate();
+  sqlite.transaction(() => {
+    if (sqlite.prepare('SELECT 1 FROM migrations WHERE version = 11').get()) return;
+    // Early v10 installations predate command de-duplication. Repair forward.
+    sqlite.exec(`CREATE TABLE IF NOT EXISTS mabar_commands (room_id TEXT NOT NULL REFERENCES mabar_rooms(id) ON DELETE CASCADE, command_id TEXT NOT NULL, PRIMARY KEY(room_id,command_id));
+      INSERT INTO migrations(version) VALUES (11);`);
+  }).immediate();
   return { sqlite, orm: drizzle(sqlite, { schema }) };
 }
 export type Store = ReturnType<typeof openDatabase>;

@@ -5,7 +5,7 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
-import { quickQuestions } from "../../content/mabar-questions";
+import { randomStages } from "../../content/random";
 import type { RoomView } from "@nyambung/shared";
 test.skip(
   process.env.MABAR_ENABLED !== "true",
@@ -40,15 +40,8 @@ async function setup(
       visibility: "unlisted",
       capacity: 8,
       mode,
-      rounds:
-        mode === "quick"
-          ? 5
-          : mode === "semantic"
-            ? 5
-            : mode === "word"
-              ? 3
-              : 1,
-      seconds: mode === "word" ? 10 : mode === "semantic" ? 30 : 20,
+      rounds: mode === "quick" ? 5 : mode === "word" ? 3 : 1,
+      seconds: mode === "word" ? 10 : 20,
     },
   });
   const room = (await response.json()) as RoomView;
@@ -82,7 +75,7 @@ async function setup(
     close: () => Promise.all(contexts.map((c) => c.close())),
   };
 }
-for (const mode of ["quick", "semantic", "word", "chain"])
+for (const mode of ["quick", "word", "chain"])
   test(`multiplayer ${mode} completes across separate guests`, async ({
     browser,
   }, testInfo) => {
@@ -163,58 +156,80 @@ for (const mode of ["quick", "semantic", "word", "chain"])
             .first()
             .click();
         await g.advance(30001);
+      } else if (mode === "word") {
+        // The first player chains a word; the next runs out of time and is eliminated.
+        const current = await g.snapshot();
+        const selves = await Promise.all(
+          g.pages.map((_, n) => g.snapshot(n).then((v) => v.self)),
+        );
+        const turn = selves.indexOf(current.match!.turn!);
+        const waiting = g.pages[1 - turn];
+        await expect(waiting.getByText("Tunggu giliranmu", { exact: false })).toBeVisible();
+        await g.pages[turn]
+          .getByRole("textbox", { name: "Jawaban mabar" })
+          .fill("hujan");
+        await g.pages[turn].getByRole("button", { name: "Kirim", exact: true }).click();
+        await expect.poll(async () => (await g.snapshot()).match!.turn).toBe(
+          selves[1 - turn],
+        );
+        await expect(waiting.getByText("Giliranmu!", { exact: true })).toBeVisible();
+        await expect(waiting.locator(".used-words")).toContainText("hujan");
+        await g.advance(11000);
+        await g.phase("reveal");
+        await expect(g.pages[turn].locator(".reveal-answer")).toContainText("gugur");
+        await g.advance(3001);
       } else {
         const total = (await g.snapshot()).match!.total;
         for (let n = 0; n < total; n++) {
-          if (mode === "quick") {
-            if (n === 0 && testInfo.project.name === "mobile") {
-              const p = g.pages[0];
-              await p.getByRole("textbox", { name: "Jawaban mabar" }).focus();
-              await p.evaluate(() => {
-                Object.defineProperty(visualViewport, "height", {
-                  configurable: true,
-                  value: 430,
-                });
-                visualViewport!.dispatchEvent(new Event("resize"));
+          if (n === 0 && testInfo.project.name === "mobile") {
+            const p = g.pages[0];
+            await p.getByRole("textbox", { name: "Jawaban mabar" }).focus();
+            await p.evaluate(() => {
+              Object.defineProperty(visualViewport, "height", {
+                configurable: true,
+                value: 430,
               });
-              await expect(p.locator("html")).toHaveAttribute(
-                "data-keyboard",
-                "open",
-              );
-              await expect
-                .poll(() =>
-                  p
-                    .getByRole("textbox", { name: "Jawaban mabar" })
-                    .evaluate((el) => el.getBoundingClientRect().bottom),
-                )
-                .toBeLessThanOrEqual(430);
-              await p.evaluate(() => {
-                Object.defineProperty(visualViewport, "height", {
-                  configurable: true,
-                  value: innerHeight,
-                });
-                visualViewport!.dispatchEvent(new Event("resize"));
+              visualViewport!.dispatchEvent(new Event("resize"));
+            });
+            await expect(p.locator("html")).toHaveAttribute(
+              "data-keyboard",
+              "open",
+            );
+            await expect
+              .poll(() =>
+                p
+                  .getByRole("textbox", { name: "Jawaban mabar" })
+                  .evaluate((el) => el.getBoundingClientRect().bottom),
+              )
+              .toBeLessThanOrEqual(430);
+            await p.evaluate(() => {
+              Object.defineProperty(visualViewport, "height", {
+                configurable: true,
+                value: innerHeight,
               });
-            }
-            const current = await g.snapshot();
-            const answer = quickQuestions.find(
-              (q) => q.prompt === current.match!.prompt,
-            )!.answers[0];
-            for (const p of g.pages) {
-              await p
-                .getByRole("textbox", { name: "Jawaban mabar" })
-                .fill(answer);
-              await p
-                .getByRole("button", { name: "Kirim", exact: true })
-                .click();
-              await expect(
-                p.getByText("Jawaban terkunci", { exact: true }),
-              ).toBeVisible();
-            }
+              visualViewport!.dispatchEvent(new Event("resize"));
+            });
           }
-          await g.advance(46000);
+          const current = await g.snapshot();
+          const key = (clues: string[]) => [...clues].sort().join("|");
+          const stage = randomStages.find(
+            (s) => key(s.clues) === key(current.match!.clues!),
+          )!;
+          await expect(g.pages[0].locator(".clue-chips")).toContainText(
+            current.match!.clues![0],
+          );
+          for (const p of g.pages) {
+            await p
+              .getByRole("textbox", { name: "Jawaban mabar" })
+              .fill(stage.best);
+            await p.getByRole("button", { name: "Kirim", exact: true }).click();
+          }
+          // Everyone answered, so the round reveals without waiting for the timer.
           await g.phase("reveal");
-          await g.advance(5001);
+          await expect(g.pages[0].locator(".reveal-answer")).toHaveText(
+            stage.best,
+          );
+          await g.advance(6001);
           if (n + 1 < total) await g.phase("playing");
         }
       }
@@ -249,16 +264,18 @@ for (const mode of ["quick", "semantic", "word", "chain"])
   });
 test("web lobby creates a password room and supports narrow screens", async ({
   page,
-}) => {
+}, testInfo) => {
+  // Each project shares one server, so the room name must be unique per run.
+  const roomName = `Room Lobby ${testInfo.project.name}`;
   await page.goto("/");
   await page.getByRole("button", { name: "Mabar", exact: true }).click();
   await page.getByLabel("Nama guest").fill("Tamu Pixel");
   await page.getByRole("button", { name: "Simpan profil" }).click();
   await page.getByRole("button", { name: "Buat room", exact: true }).click();
-  await page.getByLabel("Nama room").fill("Room Pixel");
+  await page.getByLabel("Nama room").fill(roomName);
   await page.getByLabel("Password", { exact: true }).fill("rahasia");
   await page.getByRole("button", { name: "Buat dan masuk" }).click();
-  await expect(page.getByRole("heading", { name: "Room Pixel" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: roomName })).toBeVisible();
   await expect(page.locator(".mabar-heading [role=status]")).toHaveText("Live");
   for (const [width, height] of [
     [320, 568],
@@ -276,11 +293,20 @@ test("web lobby creates a password room and supports narrow screens", async ({
   await expect(
     page.getByRole("button", { name: "Buat room", exact: true }),
   ).toBeVisible();
+  // The last member leaving closes the room instead of leaving it listed.
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  const rooms = (await page.request
+    .get("/api/mabar/rooms")
+    .then((r) => r.json())) as { name: string }[];
+  expect(rooms.map((r) => r.name)).not.toContain(roomName);
+  await expect(page.getByText(roomName)).toHaveCount(0);
 });
 
 test("Discord SDK opens the verified shared lobby and PiP hides private input", async ({
   browser,
-}) => {
+}, testInfo) => {
+  // A fresh Activity instance per project keeps earlier matches out of this lobby.
+  const instance = `mabar-e2e-${testInfo.project.name}`;
   const contexts: BrowserContext[] = [];
   try {
     for (const person of ["alice", "bob"]) {
@@ -293,7 +319,7 @@ test("Discord SDK opens the verified shared lobby and PiP hides private input", 
       await page.route("**/mabar-discord-test", (route) =>
         route.fulfill({
           contentType: "text/html",
-          body: `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><iframe id="activity" style="position:fixed;inset:0;width:100%;height:100%;border:0" src="/?frame_id=test&instance_id=mabar-e2e&platform=desktop&person=${person}"></iframe>`,
+          body: `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><iframe id="activity" style="position:fixed;inset:0;width:100%;height:100%;border:0" src="/?frame_id=test&instance_id=${instance}&platform=desktop&person=${person}"></iframe>`,
         }),
       );
       await page.route("**/assets/*.js", async (route) => {
@@ -302,7 +328,7 @@ test("Discord SDK opens the verified shared lobby and PiP hides private input", 
         if (body.includes("as DiscordSDK"))
           return route.fulfill({
             contentType: "text/javascript",
-            body: `export class DiscordSDK {instanceId='mabar-e2e';ready(){return Promise.resolve()};subscribe(event,listener){if(event==='ACTIVITY_LAYOUT_MODE_UPDATE')window.__setMabarLayout=layout_mode=>listener({layout_mode});return Promise.resolve()};commands={authorize:async()=>({code:'${person}'}),authenticate:async()=>({user:{id:'${person === "alice" ? "444444444444444444" : "555555555555555555"}'}}),setActivity:async()=>({})};}`,
+            body: `export class DiscordSDK {instanceId='${instance}';ready(){return Promise.resolve()};subscribe(event,listener){if(event==='ACTIVITY_LAYOUT_MODE_UPDATE')window.__setMabarLayout=layout_mode=>listener({layout_mode});return Promise.resolve()};commands={authorize:async()=>({code:'${person}'}),authenticate:async()=>({user:{id:'${person === "alice" ? "444444444444444444" : "555555555555555555"}'}}),setActivity:async()=>({})};}`,
           });
         return route.fulfill({ response, body });
       });
@@ -367,4 +393,64 @@ test("Discord SDK opens the verified shared lobby and PiP hides private input", 
   } finally {
     await Promise.all(contexts.map((c) => c.close()));
   }
+});
+
+test('mode selector stays in the arcade header without splitting the home layout',async({page})=>{
+  await page.goto('/');
+  const selector=page.getByRole('navigation',{name:'Pilihan permainan'});
+  await expect(page.locator('.site-header').getByRole('navigation',{name:'Pilihan permainan'})).toBeVisible();
+  for(const [width,height] of [[1280,800],[844,390],[390,844],[320,568]]){
+    await page.setViewportSize({width,height});
+    await expect.poll(()=>selector.evaluate(el=>{const header=el.closest('header')!.getBoundingClientRect(),box=el.getBoundingClientRect();return box.top>=header.top-1&&box.bottom<=header.bottom+1&&header.right<=innerWidth&&el.scrollWidth<=el.clientWidth+1;})).toBe(true);
+    await expect(page.getByRole('button',{name:'Main',exact:true})).toBeInViewport();
+    await page.screenshot({path:`test-results/mode-selector-${width}x${height}.png`});
+  }
+  await selector.getByRole('button',{name:'Mabar',exact:true}).click();
+  await expect(selector.getByRole('button',{name:'Mabar',exact:true})).toHaveAttribute('aria-pressed','true');
+  await expect(page.getByLabel('Nama guest')).toBeVisible();
+  await selector.getByRole('button',{name:'Solo',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Main',exact:true})).toBeVisible();
+});
+
+test('room controls use pixel menus and stay aligned on narrow screens', async ({page}) => {
+  await page.goto('/');
+  await page.getByRole('button', {name:'Mabar', exact:true}).click();
+  await page.getByLabel('Nama guest').fill('Pixel Guest');
+  await page.getByRole('button', {name:'Simpan profil'}).click();
+  await page.getByRole('button', {name:'Ubah profil'}).click();
+  await expect(page.getByLabel('Foto', {exact:true})).toHaveAttribute('type', 'file');
+  await page.getByRole('button', {name:'Batal', exact:true}).click();
+  // Lobby sections are separate tabs, not one long page.
+  await expect(page.getByLabel('Kode room')).toHaveCount(0);
+  await page.getByRole('button', {name:'Pakai kode', exact:true}).click();
+  await expect(page.getByLabel('Kode room')).toBeVisible();
+  await expect(page.getByLabel('Cari room')).toHaveCount(0);
+  const heights = await page.locator('.mabar-join').evaluate(el => [...el.querySelectorAll('input,button')].map(c => Math.round(c.getBoundingClientRect().height)));
+  expect(new Set(heights).size).toBe(1);
+  await page.getByRole('button', {name:'Buat room',exact:true}).click();
+  const settings = page.locator('.mabar-settings');
+  await settings.getByRole('button', {name:'Mode',exact:true}).click();
+  await page.getByRole('option', {name:'Sambung Kata',exact:true}).click();
+  await expect(settings.getByRole('button', {name:'Waktu awal',exact:true})).toContainText('10 dtk');
+  await expect(settings.getByRole('button', {name:'Putaran',exact:true})).toHaveCount(0);
+  const capacity = settings.getByRole('button', {name:'Kapasitas',exact:true});
+  await capacity.focus();
+  await capacity.press('ArrowDown');
+  await page.getByRole('listbox', {name:'Kapasitas'}).press('End');
+  await page.getByRole('listbox', {name:'Kapasitas'}).press('Enter');
+  await expect(capacity).toContainText('12');
+  await capacity.click();
+  await page.getByRole('listbox', {name:'Kapasitas'}).press('Escape');
+  await expect(capacity).toBeFocused();
+  for (const [width,height] of [[1280,800],[390,844],[320,568],[844,390]]) {
+    await page.setViewportSize({width,height});
+    expect(await page.locator('.mabar-page').evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+    await settings.getByRole('button', {name:'Mode',exact:true}).click();
+    await expect(page.getByRole('option', {name:'Tebak Cepat',exact:true})).toBeVisible();
+    await page.screenshot({path:`test-results/mabar-controls-${width}x${height}.png`});
+    await page.getByRole('listbox', {name:'Mode'}).press('Escape');
+  }
+  await page.getByLabel('Nama room', {exact:true}).fill('Room Pixel');
+  await page.getByRole('button', {name:'Buat dan masuk',exact:true}).click();
+  await expect(page.getByRole('heading', {name:'Room Pixel'})).toBeVisible();
 });

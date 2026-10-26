@@ -1,10 +1,9 @@
 import { z } from "zod";
-export const mabarModes = ["chain", "quick", "semantic", "word"] as const;
+export const mabarModes = ["chain", "quick", "word"] as const;
 export type MabarMode = (typeof mabarModes)[number];
 export const modeLabels: Record<MabarMode, string> = {
   chain: "Rantai Gambar",
   quick: "Tebak Cepat",
-  semantic: "Nyambung Bareng",
   word: "Sambung Kata",
 };
 export const roomSettings = z.object({
@@ -61,8 +60,15 @@ export interface MatchView {
   total: number;
   deadline: number;
   prompt: string;
+  /** Tebak Cepat: the random-mode round kind and its clues. */
+  kind?: "bridge2" | "bridge3" | "closest";
   clues?: string[];
   turn?: string;
+  /** Sambung Kata: elimination order, current round, turn length and recent words. */
+  eliminated?: string[];
+  round?: number;
+  turnSeconds?: number;
+  used?: string[];
   submitted: boolean;
   task?: "text" | "drawing";
   previous?: ChainEntry;
@@ -71,10 +77,13 @@ export interface MatchView {
   galleryIndex?: number;
   reveal?: {
     answer: string;
+    explanation?: string;
+    eliminated?: string;
     answers: {
       playerId: string;
       word: string;
       score: number;
+      quality?: number;
       connections?: number[];
     }[];
   };

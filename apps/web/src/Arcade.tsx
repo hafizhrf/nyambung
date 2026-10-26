@@ -18,5 +18,5 @@ export function CrtControl() {
     document.documentElement.dataset.crt=enabled?'on':'off';
     try { localStorage.setItem('nyambung-crt',enabled?'on':'off'); } catch { /* Optional in embedded clients. */ }
   },[enabled]);
-  return <button className="icon-button crt-button" aria-label="Efek CRT" aria-pressed={enabled} title={`Efek CRT ${enabled?'on':'off'}`} onClick={()=>setEnabled(value=>!value)}><PixelIcon name="crt"/></button>;
+  return <button className="setting-row crt-button" aria-label="Efek CRT" aria-pressed={enabled} title={`Efek CRT ${enabled?'on':'off'}`} onClick={()=>setEnabled(value=>!value)}><PixelIcon name="crt"/><span>Efek CRT</span><b>{enabled?'ON':'OFF'}</b></button>;
 }

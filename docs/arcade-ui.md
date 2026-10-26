@@ -2,7 +2,7 @@
 
 Satu tema gelap untuk website, Discord Activity, dan floating/PiP: font pixel tegak Press Start 2P,
 bingkai pixel emas, petunjuk hijau/ungu, serta skor bergaya mesin arcade.
-Tombol **Efek CRT** mengatur lengkungan tabung, vignette, phosphor RGB, scanline statis, bloom berwarna, serta gelombang horizontal pelan; Motion dan Suara tersedia di Pengaturan.
+Tombol **Efek CRT** tersedia di **Pengaturan**, bersama Motion dan Suara. Tombol ini mengatur lengkungan tabung, vignette, phosphor RGB, scanline statis, bloom berwarna, serta gelombang horizontal pelan.
 Judul beranda dan rekap memotong garis bingkai seperti menu konsol lama.
 Pada logo beranda, huruf Y, U, dan tanda seru meredup seperti lampu reklame,
 dengan siklus berbeda (11–17 detik). Animasi hanya mengubah opacity huruf,

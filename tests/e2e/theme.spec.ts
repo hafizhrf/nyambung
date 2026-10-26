@@ -8,6 +8,8 @@ test('arcade theme ignores old light preferences and CRT persists across game an
   });
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme','arcade');
+  await expect(page.locator('.site-header').getByRole('button',{name:'Efek CRT'})).toHaveCount(0);
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   const crt=page.getByRole('button',{name:'Efek CRT',exact:true});
   await expect(crt).toHaveAttribute('aria-pressed','true');
   await expect(page.locator('.crt-screen')).toHaveCSS('filter',/crt-barrel/);
@@ -24,7 +26,9 @@ test('arcade theme ignores old light preferences and CRT persists across game an
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content','#08090d');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme','arcade');
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await expect(crt).toHaveAttribute('aria-pressed','false');
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await page.getByRole('button',{name:'Cara bermain'}).click();
   await expect(page.getByRole('dialog')).toHaveCSS('background-color','rgb(16, 16, 23)');
   await page.screenshot({path:'test-results/arcade-help.png'});
@@ -33,7 +37,9 @@ test('arcade theme ignores old light preferences and CRT persists across game an
   await expect(page.locator('.game-paper')).toHaveCSS('background-color','rgb(16, 16, 23)');
   await expect(page.getByRole('textbox')).toHaveCSS('color','rgb(240, 233, 203)');
   await page.screenshot({path:'test-results/arcade-crt-off.png'});
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await crt.click();
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-crt','on');
   await page.screenshot({path:'test-results/arcade-crt-on.png'});
   await page.getByRole('textbox').fill('restoran');await page.getByRole('textbox').press('Enter');
@@ -48,7 +54,9 @@ test('arcade controls work when embedded storage is unavailable',async({page})=>
   });
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('data-theme','arcade');
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await page.getByRole('button',{name:'Efek CRT',exact:true}).click();
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-crt','off');
   await page.getByRole('button',{name:'Main',exact:true}).click();
   await expect(page.getByRole('textbox')).toBeVisible();
@@ -107,7 +115,9 @@ test('CRT light moves smoothly over content and stops with Motion, reduced motio
   await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await page.emulateMedia({reducedMotion:'no-preference'});
   await expect(page.locator('html')).toHaveAttribute('data-crt-signal','on');
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await page.getByRole('button',{name:'Efek CRT',exact:true}).click();
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-crt-signal','off');
   await expect(page.locator('.crt-screen')).toHaveCSS('filter','none');
 });

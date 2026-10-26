@@ -9,7 +9,7 @@ test('embedded Activity shows a configuration error and keeps its controls insid
   await page.goto('/activity-test');
   const activity = page.frameLocator('#activity');
   await expect(activity.locator('html')).toHaveAttribute('data-theme','arcade');
-  await expect(activity.getByRole('button',{name:'Efek CRT'})).toBeVisible();
+  await expect(activity.locator('.site-header').getByRole('button',{name:'Efek CRT'})).toHaveCount(0);
   await expect(activity.getByRole('button', { name: 'Pemain di Activity' })).toHaveCount(0);
   await expect(activity.getByRole('heading',{name:'Belum bisa membuka Nyambung'})).toBeVisible();
   await expect(activity.getByRole('button',{name:'Coba lagi',exact:true})).toBeVisible();
@@ -22,7 +22,9 @@ test('embedded Activity shows a configuration error and keeps its controls insid
   });
   expect(bounds).toEqual({ outside: 0, scrolls: false });
   await page.screenshot({path:'test-results/discord-dark-mode.png'});
+  await activity.getByRole('button',{name:'Pengaturan'}).click();
   await activity.getByRole('button',{name:'Efek CRT'}).click();
+  await activity.getByRole('button',{name:'Tutup',exact:true}).click();
   await expect(activity.locator('html')).toHaveAttribute('data-crt','off');
   await expect(activity.locator('html')).toHaveAttribute('data-theme','arcade');
   await page.reload();
@@ -159,7 +161,9 @@ test('Activity header and dialogs stay clear of native Discord controls',async({
   });
   await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(94);
   const content=await frame.locator('main').boundingBox();expect(content!.y+content!.height).toBeLessThanOrEqual(820);
+  await frame.getByRole('button',{name:'Pengaturan'}).click();
   await frame.getByRole('button',{name:'Efek CRT'}).click();
+  await frame.getByRole('button',{name:'Tutup',exact:true}).click();
   await frame.getByRole('button',{name:'Cara bermain'}).click();
   const modal=await frame.getByRole('dialog').boundingBox();expect(modal!.y).toBeGreaterThanOrEqual(88);expect(modal!.y+modal!.height).toBeLessThanOrEqual(820);
   await page.screenshot({path:'test-results/discord-safe-area.png'});
@@ -176,7 +180,9 @@ test('Activity header and dialogs stay clear of native Discord controls',async({
   await frame.locator('html').evaluate(el=>el.style.setProperty('--discord-safe-area-inset-top','44px'));
   await page.locator('#discord-toolbar').evaluate(el=>(el as HTMLElement).style.height='44px');
   await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(50);
+  await frame.getByRole('button',{name:'Pengaturan'}).click();
   await frame.getByRole('button',{name:'Efek CRT'}).click();
+  await frame.getByRole('button',{name:'Tutup',exact:true}).click();
   await frame.locator('html').evaluate(el=>el.style.setProperty('--discord-safe-area-inset-top','0px'));
   await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(6);
   await page.goto('/');await expect.poll(()=>page.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(6);

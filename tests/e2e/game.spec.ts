@@ -605,7 +605,9 @@ test('random mode resumes independently and can be played again', async ({ page 
   expect(Math.abs(replay!.x+replay!.width/2-recap!.x-recap!.width/2)).toBeLessThan(2);
   // A fading/disabled button must reveal a gap, rather than a line through its label.
   const crt=page.getByRole('button',{name:'Efek CRT',exact:true});
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await crt.click();
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   const replayButton=page.getByRole('button',{name:'Main lagi',exact:true});
   await replayButton.evaluate(el=>(el as HTMLElement).style.opacity='0');
   const footer=(await page.locator('.random-next').boundingBox())!;
@@ -613,7 +615,9 @@ test('random mode resumes independently and can be played again', async ({ page 
   const pixels=await sharp(shot).extract({left:Math.round(replay!.x)+6,top:Math.round(footer.y+footer.height/2),width:Math.floor(replay!.width)-12,height:2}).removeAlpha().raw().toBuffer();
   expect(Math.max(...Array.from(pixels).filter((_,index)=>index%3===0))).toBeLessThan(40);
   await replayButton.evaluate(el=>(el as HTMLElement).style.opacity='');
+  await page.getByRole('button',{name:'Pengaturan'}).click();
   await crt.click();
+  await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await page.getByRole('button', { name:'Main lagi', exact:true }).click();
   const secondId = await page.evaluate(async () => (await (await fetch('/api/random')).json()).run.id as string);
   expect(secondId).not.toBe(firstId);

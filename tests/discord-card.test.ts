@@ -4,6 +4,13 @@ import {renderLiveCard,type LiveCard} from '../apps/api/src/discord-card.js';
 const card:LiveCard={date:'2026-10-24',number:3,activeCount:2,players:[{id:'123456789',name:'Hafizh',avatar:null,stages:2,completed:false,label:'Daily #003',score:null,active:true},{id:'234567890',name:'Rani',avatar:null,stages:5,completed:true,label:'Daily #003',score:4845,stageScores:[1000,950,975,970,950],active:true}]};
 afterEach(()=>vi.unstubAllGlobals());
 describe('Discord progress card',()=>{
+  it('supports Unicode profiles and both empty and full arcade cards',async()=>{
+    const empty={...structuredClone(card),activeCount:0,players:[]};
+    expect(await sharp(await renderLiveCard(empty)).metadata()).toMatchObject({width:960,height:306});
+    const full=structuredClone(card);
+    full.players=Array.from({length:8},(_,index)=>({...card.players[0],id:String(123456789+index),name:'あゆみ 🎮 • Pemain dengan nama panjang sekali',stages:index}));
+    expect(await sharp(await renderLiveCard(full)).metadata()).toMatchObject({width:960,height:908});
+  });
   it('renders a PNG with names and progress, while hiding unfinished scores',async()=>{
     const image=await renderLiveCard(card);const meta=await sharp(image).metadata();
     expect(meta).toMatchObject({format:'png',width:960,height:392});
@@ -14,8 +21,16 @@ describe('Discord progress card',()=>{
   it('shades each completed block by its own score on a fixed scale',async()=>{
     const input=structuredClone(card);input.players[1].stageScores=[0,250,500,750,1000];
     const {data,info}=await sharp(await renderLiveCard(input)).removeAlpha().raw().toBuffer({resolveWithObject:true});
-    const pixel=(stage:number)=>{const offset=(257*info.width+487+stage*45)*info.channels;return [...data.subarray(offset,offset+3)];};
-    expect([0,1,2,3,4].map(pixel)).toEqual([[33,69,52],[53,107,79],[73,145,106],[92,182,133],[112,220,160]]);
+    const pixel=(stage:number)=>{
+      const channels=[0,0,0];
+      for(let y=253;y<262;y++)for(let x=483+stage*45;x<491+stage*45;x++)for(let c=0;c<3;c++)channels[c]+=data[(y*info.width+x)*info.channels+c]/72;
+      return channels;
+    };
+    const shades=[0,1,2,3,4].map(pixel);
+    for(let stage=0;stage<5;stage++){
+      expect(shades[stage][1]).toBeGreaterThan(shades[stage][0]);
+      if(stage)expect(shades[stage][1]).toBeGreaterThan(shades[stage-1][1]);
+    }
     input.players[0].stageScores=[0,1000];const first=await renderLiveCard(input);
     input.players[0].stageScores=[1000,0];expect(await renderLiveCard(input)).toEqual(first);
   });

@@ -22,7 +22,7 @@ export const discordCommands = [{ name: 'nyambung', description: 'Main Nyambung 
   ] },
 ] }];
 export function reminderMessage(date: string, number: number, test = false) {
-  return { content: `${test ? '**Contoh pengingat**\n' : ''}**Nyambung · Daily #${String(number).padStart(3, '0')}**\n${date} · Lima babak baru sudah tersedia.`, allowed_mentions: { parse: [] }, components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Play Now', custom_id: `nyambung:daily${test ? '-test' : ''}:${date}` }] }] };
+  return { content: `${test ? '**Contoh pengingat**\n' : ''}**Nyambung · Daily #${String(number).padStart(3, '0')}**\n${date}`, allowed_mentions: { parse: [] }, components: [{ type: 1, components: [{ type: 2, style: 1, label: 'Play Now', custom_id: `nyambung:daily${test ? '-test' : ''}:${date}` }] }] };
 }
 interface Reminder { guild_id: string; channel_id: string; enabled: number; last_error: string | null }
 interface Delivery { guild_id: string; date: string; channel_id: string; status: string; attempts: number }
@@ -104,7 +104,7 @@ function createGuildDiscordBot(store: Store, discord: DiscordService, clock: () 
               if (action.name === 'atur') {
                 store.sqlite.prepare(`INSERT INTO discord_reminders(guild_id,channel_id,enabled,updated_by,updated_at) VALUES (?,?,1,?,?) ON CONFLICT(guild_id) DO UPDATE SET channel_id=excluded.channel_id,enabled=1,updated_by=excluded.updated_by,updated_at=excluded.updated_at,last_error=NULL`).run(config.guildId, channelId, data.member!.user.id, clock().getTime());
                 store.sqlite.prepare(`UPDATE discord_deliveries SET status=CASE WHEN status='blocked' THEN 'uncertain' ELSE 'pending' END,next_at=0,lease_until=0 WHERE guild_id=? AND date=? AND status IN ('failed','blocked')`).run(config.guildId, wibDate(clock()));
-                content = `Pengingat aktif di <#${channelId}> setiap 00.05 WIB. Tanpa @everyone.`;
+                content = `Pengingat aktif di <#${channelId}> setiap 00.05 WIB.`;
               } else {
                 const date = wibDate(clock());
                 const puzzle = store.sqlite.prepare('SELECT number FROM daily WHERE date=? AND demo=0').get(date) as { number: number } | undefined;

@@ -3,18 +3,19 @@
   <head>
     <meta charset="UTF-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
-    <meta name="theme-color" content="#f7f9ff"/>
+    <meta name="theme-color" content="#08090d"/>
     <script>
       (() => {
         const params = new URLSearchParams(location.search);
         const embedded = window.parent !== window || !!window.opener || /^\d+\.discordsays\.com$/.test(location.hostname) || params.get('platform') === 'mobile';
         const context = embedded && params.has('frame_id') && params.has('instance_id') ? 'discord' : 'browser';
-        let theme = context === 'discord' ? 'dark' : 'light';
-        try { const saved = localStorage.getItem(`nyambung-theme:${context}`); if (saved === 'dark' || saved === 'light') theme = saved; } catch {}
-        document.documentElement.dataset.theme = theme;
+        let crt = 'on';
+        try { if (localStorage.getItem('nyambung-crt') === 'off') crt = 'off'; } catch {}
+        document.documentElement.dataset.theme = 'arcade';
+        document.documentElement.dataset.crt = crt;
         document.documentElement.dataset.themeContext = context;
         document.documentElement.dataset.activityPlatform = context === 'discord' ? params.get('platform') || 'desktop' : 'browser';
-        document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#101722' : '#fbfcff';
+        document.querySelector('meta[name="theme-color"]').content = '#08090d';
       })();
     </script>
     <title>Nyambung | Game Kata Harian</title>

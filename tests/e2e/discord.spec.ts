@@ -8,8 +8,8 @@ test('embedded Activity shows a configuration error and keeps its controls insid
   await page.setViewportSize({ width: 320, height: 568 });
   await page.goto('/activity-test');
   const activity = page.frameLocator('#activity');
-  await expect(activity.locator('html')).toHaveAttribute('data-theme','dark');
-  await expect(activity.getByRole('button',{name:'Gunakan tema terang'})).toBeVisible();
+  await expect(activity.locator('html')).toHaveAttribute('data-theme','arcade');
+  await expect(activity.getByRole('button',{name:'Efek CRT'})).toBeVisible();
   await expect(activity.getByRole('button', { name: 'Pemain di Activity' })).toHaveCount(0);
   await expect(activity.getByRole('heading',{name:'Belum bisa membuka Nyambung'})).toBeVisible();
   await expect(activity.getByRole('button',{name:'Coba lagi',exact:true})).toBeVisible();
@@ -22,12 +22,14 @@ test('embedded Activity shows a configuration error and keeps its controls insid
   });
   expect(bounds).toEqual({ outside: 0, scrolls: false });
   await page.screenshot({path:'test-results/discord-dark-mode.png'});
-  await activity.getByRole('button',{name:'Gunakan tema terang'}).click();
-  await expect(activity.locator('html')).toHaveAttribute('data-theme','light');
+  await activity.getByRole('button',{name:'Efek CRT'}).click();
+  await expect(activity.locator('html')).toHaveAttribute('data-crt','off');
+  await expect(activity.locator('html')).toHaveAttribute('data-theme','arcade');
   await page.reload();
-  await expect(page.frameLocator('#activity').locator('html')).toHaveAttribute('data-theme','light');
+  await expect(page.frameLocator('#activity').locator('html')).toHaveAttribute('data-theme','arcade');
+  await expect(page.frameLocator('#activity').locator('html')).toHaveAttribute('data-crt','off');
   await page.goto('/');
-  await expect(page.locator('html')).toHaveAttribute('data-theme','light');
+  await expect(page.locator('html')).toHaveAttribute('data-theme','arcade');
 
 });
 
@@ -101,8 +103,9 @@ test('Activity shows account and Daily loading states, then opens the game',asyn
       await expect(frame.getByRole('dialog')).toHaveCount(0);
       await expect(frame.getByRole('progressbar',{name:'Babak selesai'})).toHaveAttribute('aria-valuenow','1');
       await expect(frame.locator('.activity-mini')).not.toContainText('payung');
-      const fits=await frame.locator('.activity-mini').evaluate(root=>Array.from(root.querySelectorAll('header,.mini-status,.mini-clues,.mini-progress,.mini-hint')).every(el=>{const box=el.getBoundingClientRect();return box.left>=0&&box.top>=0&&box.right<=innerWidth+1&&box.bottom<=innerHeight+1;}));
+      const fits=await frame.locator('.activity-mini').evaluate(root=>Array.from(root.querySelectorAll('header,.mini-brand,.mini-mode,.mini-status,.mini-clues,.mini-progress,.mini-hint')).every(el=>{const box=el.getBoundingClientRect();return box.left>=0&&box.top>=0&&box.right<=innerWidth+1&&box.bottom<=innerHeight+1;}));
       expect(fits).toBe(true);
+      expect(await frame.locator('.activity-mini').evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
       expect(await frame.locator('html').evaluate(el=>el.scrollWidth<=innerWidth)).toBe(true);
       await page.screenshot({path:`test-results/${testInfo.project.name}-pip-${width}x${height}.png`});
     }
@@ -150,13 +153,13 @@ test('Activity header and dialogs stay clear of native Discord controls',async({
   await page.route('**/api/discord/bootstrap',route=>route.fulfill({status:503,json:{error:'Koneksi contoh.'}}));
   await page.setViewportSize({width:390,height:844});await page.goto('/activity-safe-area-test');
   const frame=page.frameLocator('#activity');await expect(frame.locator('.site-header')).toBeVisible();
-  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(56);
+  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(62);
   await frame.locator('html').evaluate(el=>{
     el.style.setProperty('--discord-safe-area-inset-top','88px');el.style.setProperty('--discord-safe-area-inset-bottom','24px');
   });
-  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(88);
-  const footer=await frame.locator('.site-footer').boundingBox();expect(footer!.y+footer!.height).toBeLessThanOrEqual(820);
-  await frame.getByRole('button',{name:'Gunakan tema terang'}).click();
+  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(94);
+  const content=await frame.locator('main').boundingBox();expect(content!.y+content!.height).toBeLessThanOrEqual(820);
+  await frame.getByRole('button',{name:'Efek CRT'}).click();
   await frame.getByRole('button',{name:'Cara bermain'}).click();
   const modal=await frame.getByRole('dialog').boundingBox();expect(modal!.y).toBeGreaterThanOrEqual(88);expect(modal!.y+modal!.height).toBeLessThanOrEqual(820);
   await page.screenshot({path:'test-results/discord-safe-area.png'});
@@ -172,9 +175,42 @@ test('Activity header and dialogs stay clear of native Discord controls',async({
   await frame.getByRole('button',{name:'Tutup',exact:true}).click();
   await frame.locator('html').evaluate(el=>el.style.setProperty('--discord-safe-area-inset-top','44px'));
   await page.locator('#discord-toolbar').evaluate(el=>(el as HTMLElement).style.height='44px');
-  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(44);
-  await frame.getByRole('button',{name:'Gunakan tema gelap'}).click();
+  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(50);
+  await frame.getByRole('button',{name:'Efek CRT'}).click();
   await frame.locator('html').evaluate(el=>el.style.setProperty('--discord-safe-area-inset-top','0px'));
-  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(0);
-  await page.goto('/');await expect.poll(()=>page.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(0);
+  await expect.poll(()=>frame.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(6);
+  await page.goto('/');await expect.poll(()=>page.locator('.site-header').evaluate(el=>el.getBoundingClientRect().top)).toBe(6);
+});
+
+test('arcade server scores retry, expand and contain long Unicode player names',async({page},testInfo)=>{
+  const today=await(await page.request.get('/api/daily')).json();
+  const userId='444444444444444444';
+  const run={id:'arcade-completed',mode:'daily',date:today.date,number:today.number,demo:false,completed:true,total:3000,current:null,results:Array.from({length:5},(_,index)=>({index,kind:'bridge2',clues:['hujan','panas'],word:'payung',best:'payung',explanation:'',score:600,connections:[.6,.6],skipped:false}))};
+  await page.setViewportSize({width:320,height:568});
+  await page.route('**/arcade-scores-test',route=>route.fulfill({contentType:'text/html',body:`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body style="margin:0"><iframe id="activity" style="position:fixed;inset:0;width:100%;height:100%;border:0" src="/?frame_id=test&instance_id=test-instance&platform=${testInfo.project.name==='mobile'?'mobile':'desktop'}"></iframe></body></html>`}));
+  await page.route('**/assets/*.js',async route=>{
+    const response=await route.fetch();const body=await response.text();
+    if(body.includes('as DiscordSDK'))return route.fulfill({contentType:'text/javascript',body:`export class DiscordSDK {instanceId='test-instance';async ready(){};subscribe(){return Promise.resolve()};commands={authorize:async()=>({code:'code'}),authenticate:async()=>({user:{id:'${userId}'}}),setActivity:async()=>({})};}`});
+    return route.fulfill({response,body});
+  });
+  await page.route('**/api/discord/bootstrap',route=>route.fulfill({json:{applicationId:'111111111111111111',nonce:'test'}}));
+  await page.route('**/api/discord/auth',route=>route.fulfill({json:{accessToken:'access',sessionToken:'1'.repeat(64),expiresAt:Date.now()+3600000,user:{id:userId,name:'Alice'},instanceId:'test-instance'}}));
+  await page.route('**/api/daily',route=>route.fulfill({json:{...today,demo:false,run}}));
+  await page.route('**/api/random',route=>route.fulfill({json:{available:false,run:null}}));
+  await page.route('**/api/runs',route=>route.fulfill({json:run}));
+  await page.route('**/api/runs/arcade-completed/comparison',route=>route.fulfill({json:{players:0,average:0,best:0,rank:null,abovePercent:null,ownScore:null,histogram:Array(10).fill(0)}}));
+  await page.route('**/api/discord/instances/*/progress*',route=>route.fulfill({json:{date:today.date,number:today.number,participants:[]}}));
+  let attempts=0;
+  await page.route('**/api/discord/scores/*',route=>route.fulfill(++attempts===1?{status:503,json:{error:'Coba lagi'}}:{json:{date:today.date,totalPlayers:6,players:Array.from({length:6},(_,index)=>({id:index===0?userId:String(555555555555555550n+BigInt(index)),name:'あゆみ 🎮 Pemain dengan nama yang sangat panjang',avatar:null,score:3000-index*100,rank:index+1}))}}));
+  await page.goto('/arcade-scores-test');
+  const frame=page.frameLocator('#activity');const scores=frame.getByRole('region',{name:'Skor pemain di server'});
+  await scores.getByRole('button',{name:'Coba lagi',exact:true}).click();
+  await expect(scores.locator('li')).toHaveCount(3);
+  await scores.getByRole('button',{name:'Lihat semua skor'}).click();
+  await expect(scores.locator('li')).toHaveCount(6);
+  expect(await scores.evaluate(el=>el.scrollWidth<=el.clientWidth)).toBe(true);
+  expect(await frame.locator('html').evaluate(el=>el.scrollWidth<=innerWidth)).toBe(true);
+  await expect(frame.locator('main')).toHaveCSS('overflow-y','auto');
+  await frame.locator('main').evaluate(el=>{el.scrollTop=0;});
+  await page.screenshot({path:`test-results/${testInfo.project.name}-arcade-server-scores.png`});
 });

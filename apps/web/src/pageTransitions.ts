@@ -16,9 +16,10 @@ export function enterPage(root: HTMLElement, page: 'home' | 'game' | 'results') 
       timeline
         .fromTo('.result-kicker, .results-page h1, .grand-score', { opacity:0, y:10 }, { opacity:1, y:0, duration:.3, stagger:.04, clearProps:'opacity,transform', ease:'power3.out' }, 0)
         .fromTo('.result-row', { opacity:0, y:8 }, { opacity:1, y:0, duration:.28, stagger:.045, clearProps:'opacity,transform', ease:'power3.out' }, .1)
-        .fromTo('.result-actions, .share-status, .next-daily', { opacity:0, y:6 }, { opacity:1, y:0, duration:.26, stagger:.035, clearProps:'opacity,transform', ease:'power3.out' }, .3);
-      const waves = root.querySelectorAll<SVGRectElement>('.result-wave-clip');
-      if (waves.length) timeline.fromTo(waves, { attr:{width:0} }, {
+        .fromTo('.result-actions, .next-daily:not(.random-next)', { opacity:0, y:6 }, { opacity:1, y:0, duration:.26, stagger:.035, clearProps:'opacity,transform', ease:'power3.out' }, .3)
+        .fromTo('.random-next > button', { opacity:0 }, { opacity:1, duration:.26, clearProps:'opacity', ease:'power2.out' }, .335);
+      const meters = root.querySelectorAll<SVGRectElement>('.score-meter-clip');
+      if (meters.length) timeline.fromTo(meters, { attr:{width:0} }, {
         attr:{width:(_index:number, rect:SVGRectElement) => Number(rect.dataset.strength) * 180},
         duration:.5, stagger:.045, ease:'power2.out',
       }, .16);

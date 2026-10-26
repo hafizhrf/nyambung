@@ -13,9 +13,6 @@ export function Comparison({ runId }: { runId: string }) {
   }, [runId, retry]);
   const num = (value: number) => value.toLocaleString('id-ID');
   return <section className="daily-comparison" aria-label="Perbandingan daily" aria-live="polite">
-    {data ? <><div className="comparison-summary"><strong>{data.abovePercent !== null ? `Kamu lebih baik dari ${data.abovePercent}% pemain lain` : 'Menunggu pemain lain'}</strong><span>{num(data.players)} selesai · Rata-rata {data.players ? num(data.average) : '-'}{data.rank ? ` · #${num(data.rank)}` : ''}</span></div><div className="score-distribution" role="img" aria-label={`Distribusi skor ${num(data.players)} pemain${data.ownScore != null ? `, skormu ${num(data.ownScore)}` : ''}`}>
-      <div className="histogram-bars">{(data.histogram ?? Array(10).fill(0)).map((count,index) => <div key={index} className={`histogram-bin ${data.ownScore != null && Math.min(9,Math.floor(data.ownScore/500)) === index ? 'is-you' : ''}`} title={`${num(index*500)}-${num(index===9 ? 5000 : index*500+499)}: ${num(count)} pemain`}><i className="histogram-bar" style={{height:`${count/Math.max(1,...(data.histogram??[]))*100}%`}}/></div>)}</div>
-      <div className="histogram-axis"><span>0</span><span>{data.ownScore != null ? `Kamu ${num(data.ownScore)}` : 'Skor'}</span><span>5.000</span></div>
-    </div></> : <p role="status">{error ? <>Perbandingan belum termuat. <button className="text-button" onClick={() => setRetry(value => value + 1)}>Coba lagi</button></> : 'Memuat perbandingan pemain…'}</p>}
+    {data ? <><div className="comparison-summary"><span>PERINGKAT</span><strong>{data.rank?`#${num(data.rank)}`:'—'}</strong></div><div className="comparison-summary"><span>RATA-RATA</span><strong>{data.players?num(data.average):'—'}</strong></div><div className="comparison-summary"><span>{num(data.players)} PEMAIN</span><strong>{data.abovePercent!==null?`TOP ${100-data.abovePercent}%`:'—'}</strong></div></> : <p role="status">{error ? <>Perbandingan belum termuat. <button className="text-button" onClick={() => setRetry(value => value + 1)}>Coba lagi</button></> : 'Memuat perbandingan pemain…'}</p>}
   </section>;
 }

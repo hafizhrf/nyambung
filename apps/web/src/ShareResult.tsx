@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DownloadIcon, Share2Icon } from '@radix-ui/react-icons';
+import { DownloadIcon, Share2Icon } from './PixelIcons';
 import type { RunView } from '@nyambung/shared';
 import { createResultImage } from './shareImage';
 import { platform } from './platform';
@@ -27,9 +27,9 @@ export function ShareResult({ run }: { run: RunView }) {
     finally {setSharing(false);}
   }
   return <div className="share-image">
-    {image ? <><img className="share-image-preview" src={image.url} width={1080} height={1350} alt="Kartu skor Nyambung tanpa petunjuk atau jawaban"/>
+    {image ? <><img className="share-image-preview" src={image.url} width={1080} height={1350} alt="Kartu skor Nyambung"/>
       <div className="share-image-actions"><button className="primary-button" disabled={sharing} onClick={() => void share()}><Share2Icon width={18} height={18} aria-hidden="true"/>{sharing?'Membuka…':'Bagikan gambar'}</button><a className="secondary-button" href={image.url} download={image.file.name} onClick={() => setStatus('Gambar diunduh.')}><DownloadIcon width={18} height={18} aria-hidden="true"/>Unduh gambar</a></div>
-      <p className="share-image-note" role="status">{status || 'PNG, tanpa petunjuk atau jawaban.'}</p></> : !error && <p role="status">Menyiapkan gambar…</p>}
+      <p className="share-image-note" role="status">{status || 'PNG'}</p></> : !error && <p role="status">Menyiapkan gambar…</p>}
     {error && <p className="error-message" role="alert">{error} {!image && <button onClick={() => setRetry(value=>value+1)}>Coba lagi</button>}</p>}
   </div>;
 }

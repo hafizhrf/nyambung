@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowRightIcon, CheckIcon } from '@radix-ui/react-icons';
+import { ArrowRightIcon, CheckIcon } from './PixelIcons';
 import type { ArchiveView } from '@nyambung/shared';
 import { api } from './api';
 

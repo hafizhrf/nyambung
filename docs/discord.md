@@ -103,14 +103,18 @@ key Jina/Gemini untuk menjalankan bot atau permainan.
 Saat pertama dibuka, Activity menampilkan loading dengan dua tahap: menghubungkan
 akun Discord, lalu menyiapkan Daily dan progres. Lobby dan kontrol bermain baru
 muncul setelah data siap. Jika otorisasi atau pengambilan data gagal, halaman
-menampilkan pesan error dan tombol Coba lagi. Tema dan bantuan tetap bisa dibuka
+menampilkan pesan error dan tombol Coba lagi. Efek CRT dan bantuan tetap bisa dibuka
 selama proses ini. Animasi loading mengikuti pengaturan Motion dan reduced motion.
 
-### Tema dan skor di halaman hasil
+### Efek CRT dan skor di halaman hasil
 
-Activity menggunakan dark mode secara default. Tombol matahari/bulan di header
-mengganti tema; pilihan disimpan terpisah untuk website dan Discord. Pilihan tetap
-berfungsi selama sesi jika penyimpanan klien dibatasi.
+Website dan Activity menggunakan satu tema arcade gelap dengan font pixel tegak Press Start 2P,
+bingkai pixel, dan palet lokal. Tombol **Efek CRT** di header mengaktifkan atau
+mematikan lengkungan tabung, vignette, phosphor, scanline statis, dan glow tipis. Pilihan disimpan di perangkat; kontrol
+Motion dan Suara tetap terpisah. Gelombang mendistorsi konten; tidak memakai overlay putih bergerak. Distorsi horizontal berhenti
+saat Motion off atau reduced motion aktif. Preferensi tema terang/gelap lama diabaikan.
+Kontrol tetap berfungsi selama sesi jika penyimpanan klien dibatasi. Efek CRT tidak
+menangkap input atau memakai kedipan; animasi menghormati reduced motion.
 
 Setelah Daily selesai, bagian **Skor di server** menampilkan nama, avatar, peringkat,
 dan skor akhir pemain di server tempat Activity dibuka pada tanggal Daily yang sama. Daftar diperbarui

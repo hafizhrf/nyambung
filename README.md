@@ -192,3 +192,18 @@ mengganti bank aktif: `npm run audit:random -- --preview`. Laporan mencakup juml
 puzzle yang lolos, pola konteks, clue unik, dan pasangan berulang. Untuk memperbarui
 bank dengan embedding tersimpan, gunakan `preview-random --reuse-published`, lalu
 `publish-random --reuse-published --approve HASH` sesuai hash preview.
+
+### Tampilan arcade
+
+Website, Discord Activity, dan floating/PiP menggunakan tema arcade CRT gelap.
+Font pixel tegak Press Start 2P disajikan lokal bersama atlas ikon dan palet dari `dungeonmode.zip`. Aset berada
+di `apps/web/public/assets/arcade` dan `apps/web/public/assets/dungeon`; tidak memerlukan CDN font. Tombol **Efek CRT**
+menyimpan pilihan lengkungan tabung, vignette, phosphor, dan scanline/glow di perangkat. Gelombang horizontal mengikuti Motion dan reduced motion. Motion dan Suara diatur terpisah.
+Preferensi light/dark sebelumnya diabaikan. Kartu hasil PNG dan kartu progres
+Discord memakai gaya yang sama; hasil share tetap tanpa petunjuk atau jawaban.
+
+Playwright menghasilkan screenshot di `test-results/`, termasuk CRT aktif/nonaktif,
+mobile, landscape, serta Discord PiP. Tes SDK memakai mock; pengujian langsung
+Discord desktop/iOS/Android tetap memerlukan akun beta sesuai `docs/discord.md`.
+
+Lihat [preview arcade dan screenshot](docs/arcade-ui.md).

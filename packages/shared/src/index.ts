@@ -18,3 +18,5 @@ export interface DiscordServerScores { date:string; totalPlayers:number; players
 export interface DiscordAuthResult { accessToken: string; sessionToken: string; expiresAt: number; user: { id: string; name: string }; instanceId: string }
 export const normalizeWord = (value: string) => value.normalize('NFKC').trim().toLocaleLowerCase('id-ID');
 export const stageNames: Record<StageKind, string> = { bridge2: 'Di tengah kata', bridge3: 'Tiga sambungan', closest: 'Sedekat makna' };
+
+export { crtImage } from './crtImage.js';

@@ -1,0 +1,28 @@
+{
+  "viewport": "1280x800",
+  "browser": "156.0.8078.4",
+  "environment": "Chromium headless, local macOS; no video recording or concurrent test browsers",
+  "samples": [
+    {
+      "mode": "on",
+      "frames": 301,
+      "medianMs": 16.699999999999818,
+      "p95Ms": 16.700000000000728,
+      "maxMs": 16.800000000000182
+    },
+    {
+      "mode": "still",
+      "frames": 301,
+      "medianMs": 16.69999999999891,
+      "p95Ms": 16.700000000000728,
+      "maxMs": 16.80000000000109
+    },
+    {
+      "mode": "off",
+      "frames": 301,
+      "medianMs": 16.69999999999891,
+      "p95Ms": 16.700000000000728,
+      "maxMs": 16.799999999999272
+    }
+  ]
+}

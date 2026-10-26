@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import sharp from 'sharp';
 async function expectCenteredModal(page: Page) {
   const dialog = page.getByRole('dialog');
   await expect(dialog).toBeVisible();
@@ -23,6 +24,11 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await page.getByRole('button', { name: 'Main', exact: true }).click();
   const input = page.getByRole('textbox', { name: 'SATU KATA VERSIMU' });
   await expect(input).toBeFocused();
+  const reducedMotion=await page.evaluate(()=>matchMedia('(prefers-reduced-motion: reduce)').matches);
+  for(const pulse of await page.locator('.flow-pulse').all()) {
+    if(reducedMotion) await expect(pulse).toHaveCSS('animation-name','none');
+    else await expect(pulse).toHaveCSS('animation-timing-function',/^steps\(/);
+  }
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.reveal')).every(el => Number(getComputedStyle(el).opacity) >= .999 && getComputedStyle(el).transform === 'none'));
   await page.screenshot({ path: `test-results/${testInfo.project.name}-game.png`, fullPage: true });
   await input.fill('tidakvalidxyz'); await input.press('Enter');
@@ -36,7 +42,7 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await expect(page.locator('.reward-label')).toHaveText('Sambungan sempurna');
   await expect(page.locator('.connection-branches rect')).toHaveCount(0);
   await expect(page.locator('.flow-progress')).toHaveCount(2);
-  await expect(page.locator('.flow-progress').first()).toHaveAttribute('d', /C/);
+  await expect(page.locator('.flow-progress').first()).toHaveAttribute('d', /V.*H.*V/);
   const other = await context.newPage(); await other.goto('/');
   await other.getByRole('button', { name: /Lanjutkan bermain/ }).click();
   await expect(other.getByText('Restoran menyajikan makanan', { exact: false })).toBeVisible();
@@ -48,9 +54,9 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   }
   await expect(page.getByRole('heading', { name: 'Hasil daily' })).toBeVisible();
   await expect(page.locator('.grand-score')).toContainText('5.000');
-  const resultWaves = await page.locator('.result-wave-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')));
-  expect(new Set(resultWaves).size).toBe(5);
-  await expect(page.locator('.result-wave-progress')).toHaveCount(5);
+  const resultMeters = await page.locator('.score-meter-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')));
+  expect(resultMeters).toHaveLength(5);
+  await expect(page.locator('.score-meter-progress')).toHaveCount(5);
   await page.waitForFunction(() => Array.from(document.querySelectorAll('.reveal')).every(el => Number(getComputedStyle(el).opacity) >= .999 && getComputedStyle(el).transform === 'none'));
   await page.screenshot({ path: `test-results/${testInfo.project.name}-results.png`, fullPage: true });
   await page.getByRole('button', { name: 'Statistikmu' }).click();
@@ -94,10 +100,10 @@ test('plays five stages, resumes, rejects invalid guesses and shares spoiler-fre
   await page.getByRole('button', { name:'Tutup', exact:true }).click();
   await page.reload(); await page.getByRole('button', { name: 'Lihat hasilmu' }).click();
   await expect(page.getByRole('heading', { name: 'Hasil daily' })).toBeVisible();
-  expect(await page.locator('.result-wave-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')))).toEqual(resultWaves);
+  expect(await page.locator('.score-meter-track').evaluateAll(paths => paths.map(path => path.getAttribute('d')))).toEqual(resultMeters);
 });
 
-test('result waves fill only in proportion to a non-perfect score', async ({ page }) => {
+test('result pixel meters fill only in proportion to a non-perfect score', async ({ page }) => {
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.goto('/');await page.getByRole('button',{name:'Main',exact:true}).click();
   const input=page.getByRole('textbox',{name:'SATU KATA VERSIMU'});
@@ -110,11 +116,11 @@ test('result waves fill only in proportion to a non-perfect score', async ({ pag
   await page.locator('.next-button').click();
   const run=await page.evaluate(async()=>(await(await fetch('/api/daily')).json()).run);
   expect(run.results[0].score).toBeGreaterThan(0);expect(run.results[0].score).toBeLessThan(1000);
-  const clips=await page.locator('.result-wave-clip').evaluateAll(rects=>rects.map(rect=>Number(rect.getAttribute('width'))));
+  const clips=await page.locator('.score-meter-clip').evaluateAll(rects=>rects.map(rect=>Number(rect.getAttribute('width'))));
   expect(clips[0]).toBeCloseTo(180*run.results[0].score/1000,3);
   expect(clips[0]).toBeLessThan(180);expect(clips.slice(1)).toEqual([0,0,0,0]);
-  await expect(page.locator('.result-wave-progress')).toHaveCount(1);
-  await page.screenshot({path:'test-results/partial-score-waves.png'});
+  await expect(page.locator('.score-meter-progress')).toHaveCount(1);
+  await page.screenshot({path:'test-results/partial-score-meters.png'});
 });
 
 test('Continue animates out and into the next round without double navigation', async ({ page }) => {
@@ -190,12 +196,17 @@ test('past Daily starts from the archive, resumes and completes without changing
   await expect(page.locator('.game-mode')).toContainText('Daily #');
 });
 
-test('the empty answer form stays at the bottom of the game card', async ({ page }) => {
+test('the answer form follows the board without a stretched empty space', async ({ page }) => {
   await page.emulateMedia({ reducedMotion:'reduce' });
   await page.goto('/');
   await page.getByRole('button', { name:'Main', exact:true }).click();
   const input = page.getByRole('textbox', { name:'SATU KATA VERSIMU' });
   await expect(input).toHaveValue('');
+  await expect.poll(()=>page.locator('.game-paper').evaluate(paper=>{
+    const board=paper.querySelector('.connection-board')!.getBoundingClientRect();
+    const form=paper.querySelector('.answer-form')!.getBoundingClientRect();
+    return form.top-board.bottom;
+  })).toBeLessThanOrEqual(16);
   await expect.poll(() => page.locator('.game-paper').evaluate(paper => {
     const form = paper.querySelector('.answer-form')!;
     const style = getComputedStyle(paper);
@@ -210,7 +221,7 @@ test('a submitted answer morphs into Continue before score details appear', asyn
   const input = page.getByRole('textbox', { name:'SATU KATA VERSIMU' });
   await input.fill('restoran');
   await page.evaluate(() => {
-    const state = (window as any).__answerMorph = { widths:[] as number[], overlap:false, running:true };
+    const state = (window as any).__answerMorph = { widths:[document.querySelector('.input-wrap')!.getBoundingClientRect().width], overlap:false, running:true };
     function sample() {
       if (!state.running) return;
       const field = document.querySelector<HTMLElement>('.input-wrap[data-morphing="true"]');
@@ -243,6 +254,7 @@ test('reduced motion reveals the answer without a field morph', async ({ page })
   await page.emulateMedia({ reducedMotion:'reduce' });
   await page.goto('/');
   await page.getByRole('button', { name:'Main', exact:true }).click();
+  await expect(page.locator('.game-paper')).toBeVisible();
   await page.evaluate(() => {
     (window as any).__morphSeen = false;
     new MutationObserver(records => {
@@ -291,7 +303,9 @@ for (const sample of [
     if (sample.reward) {
       await expect(page.locator('.score-block strong')).toContainText(String(sample.score));
       await expect.poll(() => page.locator('.reward-rays').evaluate(el => Number(getComputedStyle(el).opacity))).toBe(0);
+      await page.getByRole('button', { name: 'Pengaturan' }).click();
       await page.getByRole('button', { name: /Motion on/ }).click();
+      await page.getByRole('button', { name: 'Tutup', exact:true }).click();
       await expect(page.locator('.connection-board')).toHaveAttribute('data-reward', 'blue');
       await expect(page.locator('.reward-label')).toBeVisible();
       await expect(page.locator('.reward-rays')).toHaveCSS('opacity', '0');
@@ -343,16 +357,20 @@ test('guess updates stay in place and sound can be muted persistently', async ({
   expect(stability.shift).toBeLessThan(1);
   await expect(page.locator('.next-button')).toBeFocused();
   await expect.poll(() => page.evaluate(() => (window as any).__audioStarts.some((sound: any) => sound.rate > 1))).toBe(true);
+  await page.getByRole('button', { name:'Pengaturan' }).click();
   const soundButton = page.getByRole('button', { name: 'Suara', exact: true });
   await soundButton.click();
   await expect(soundButton).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name:'Tutup', exact:true }).click();
   const starts = await page.evaluate(() => (window as any).__audioStarts.length);
   await page.getByRole('button', { name: /Lanjut ke babak/ }).click();
   await input.fill('tidakvalidxyz'); await input.press('Enter');
   await expect(page.getByRole('alert')).toBeVisible();
   expect(await page.evaluate(() => (window as any).__audioStarts.length)).toBe(starts);
   await page.reload();
+  await page.getByRole('button', { name:'Pengaturan' }).click();
   await expect(soundButton).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name:'Tutup', exact:true }).click();
   await page.getByRole('button', { name: /Lanjutkan bermain/ }).click();
   expect(await page.evaluate(() => (window as any).__audioStarts.length)).toBe(0);
 });
@@ -370,9 +388,10 @@ async function expectFitsScreen(page: Page, selectors: string[]) {
     }));
     if (document.documentElement.scrollHeight > innerHeight + 1 || document.documentElement.scrollWidth > innerWidth + 1 || scrollY !== 0) problems.push('Document scrolls');
     // Also catch content clipped by the fixed app shell.
-    for (const selector of ['main', '.game-paper', '.daily-lobby', '.results-page']) {
+    for (const selector of ['main', '.game-paper', '.daily-lobby', '.results-page', '.results-list', '.row-score']) {
       const el = document.querySelector<HTMLElement>(selector);
       if (el && el.scrollHeight > el.clientHeight + 2) problems.push(`${selector} overflows: ${el.scrollHeight}/${el.clientHeight}`);
+      if (el && ['.results-list','.row-score'].includes(selector) && el.scrollWidth > el.clientWidth + 2) problems.push(`${selector} overflows horizontally: ${el.scrollWidth}/${el.clientWidth}`);
     }
     return problems;
   }, selectors);
@@ -390,11 +409,11 @@ async function expectConnectedLines(page:Page) {
       const start=path.getPointAtLength(0).matrixTransform(matrix);
       const end=path.getPointAtLength(path.getTotalLength()).matrixTransform(matrix);
       const clue=clues[index].getBoundingClientRect();
-      return Math.max(Math.abs(start.x-clue.left-clue.width/2),Math.abs(start.y-clue.bottom),Math.abs(end.x-answer.left-answer.width/2),Math.abs(end.y-answer.top));
+      return Math.max(Math.abs(start.x-clue.left-clue.width/2),Math.abs(start.y-clue.bottom),Math.abs(end.x-answer.left-answer.width*(clues.length===1?.5:clues.length===2?(index+1)/3:.2+index*.3)),Math.abs(end.y-answer.top));
     }));
   })).toBeLessThanOrEqual(2);
-  await expect(page.locator('.flow-base[stroke-dasharray]')).toHaveCount(0);
-  await expect(page.locator('mask')).toHaveCount(0);
+  for(const path of await page.locator('.flow-base').all()) await expect(path).toHaveAttribute('stroke-dasharray','.375 .625');
+  await expect(page.locator('.connection-branches svg')).toHaveAttribute('shape-rendering','crispEdges');
   await expect(page.locator('.connection-branches linearGradient')).toHaveAttribute('gradientUnits','userSpaceOnUse');
 }
 
@@ -408,7 +427,7 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
     : [{ width:390,height:844 }, { width:375,height:667 }, { width:320,height:568 }, { width:390,height:430 }];
   for (const size of sizes) {
     await page.setViewportSize(size);
-    await expectFitsScreen(page, ['.site-header', '.site-header button', '.site-footer', '.site-footer button', '.daily-lobby', '.lobby-play', '.lobby-random']);
+    await expectFitsScreen(page, ['.site-header', '.site-header button', '.daily-lobby', '.lobby-play', '.lobby-random']);
     await page.screenshot({ path:`test-results/fit-home-${size.width}x${size.height}.png` });
   }
   await page.getByRole('button', { name: 'Main', exact: true }).click();
@@ -417,7 +436,7 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
     await expect(input).toBeFocused();
     for (const size of sizes) {
       await page.setViewportSize(size);
-      await expectFitsScreen(page, ['.site-header', '.site-header button', '.site-footer', '.site-footer button', '.clue', '.answer-node', '.input-wrap', '.input-meta']);
+      await expectFitsScreen(page, ['.site-header', '.site-header button', '.clue', '.answer-node', '.input-wrap', '.input-meta']);
       await expectConnectedLines(page);
       if (word === 'restoran') await page.screenshot({ path:`test-results/fit-game-${size.width}x${size.height}.png` });
     }
@@ -431,6 +450,11 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
         return paper.getBoundingClientRect().bottom-next.getBoundingClientRect().bottom;
       })).toBeGreaterThanOrEqual(10);
       await expectConnectedLines(page);
+      if(size.height>520)await expect.poll(()=>page.locator('.game-paper').evaluate(paper=>{
+        const board=paper.querySelector('.connection-board')!.getBoundingClientRect();
+        const result=paper.querySelector('.stage-result')!.getBoundingClientRect();
+        return result.top-board.bottom;
+      })).toBeLessThanOrEqual(16);
       if (word === 'biru') await page.screenshot({path:`test-results/connected-three-${size.width}x${size.height}.png`});
     }
     await page.locator('.next-button').click();
@@ -438,7 +462,7 @@ test('home, all five stages and recap fit the viewport', async ({ page }, testIn
   await expect(page.getByRole('heading', { name:'Hasil daily' })).toBeVisible();
   for (const size of sizes) {
     await page.setViewportSize(size);
-    await expectFitsScreen(page, ['.site-header', '.site-footer', '.results-list', '.result-actions', '.next-daily']);
+    await expectFitsScreen(page, ['.site-header', '.results-list', '.result-actions', '.next-daily']);
     await page.screenshot({ path:`test-results/fit-${size.width}x${size.height}.png` });
   }
 });
@@ -451,6 +475,7 @@ for (const keyboardMode of ['visual viewport', 'layout viewport']) {
     await page.getByRole('button', { name: 'Main', exact: true }).click();
     const input = page.getByRole('textbox', { name: 'SATU KATA VERSIMU' });
     await expect(input).toBeFocused();
+    expect(await input.evaluate(el=>parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(16);
     const header = await page.locator('.site-header').boundingBox();
     const fullViewport = await page.evaluate(() => ({ height: visualViewport!.height, offsetTop: visualViewport!.offsetTop, layoutHeight: innerHeight }));
     for (const height of [480, 430, 340]) {
@@ -485,6 +510,29 @@ for (const keyboardMode of ['visual viewport', 'layout viewport']) {
         }
       }
     }
+    // Extremely short keyboard view: scroll only the card to keep editing controls visible.
+    await page.evaluate(()=>{
+      Object.defineProperty(visualViewport!,'height',{configurable:true,value:240});
+      visualViewport!.dispatchEvent(new Event('resize'));
+    });
+    await expect.poll(()=>page.locator('.input-wrap').evaluate(el=>{
+      const box=el.getBoundingClientRect();return box.top>=12&&box.bottom<=252&&scrollY===0;
+    })).toBe(true);
+    await page.evaluate(()=>{
+      Object.defineProperty(visualViewport!,'height',{configurable:true,value:340});
+      visualViewport!.dispatchEvent(new Event('resize'));
+    });
+    // On real phones focus can move before the keyboard's closing resize completes.
+    await input.fill('restoran');await input.press('Enter');
+    await expect(page.locator('.next-button')).toBeFocused();
+    await expect(page.locator('html')).toHaveAttribute('data-keyboard','open');
+    for(const selector of ['.clue','.answer-node','.stage-result','.next-button']){
+      for(const element of await page.locator(selector).all()){
+        const box=await element.boundingBox();
+        expect(box!.y).toBeGreaterThanOrEqual(12);
+        expect(box!.y+box!.height).toBeLessThanOrEqual(352);
+      }
+    }
     await page.evaluate(({ height, offsetTop, layoutHeight }) => {
       const viewport = window.visualViewport!;
       Object.defineProperty(viewport, 'height', { configurable: true, value: height });
@@ -493,8 +541,9 @@ for (const keyboardMode of ['visual viewport', 'layout viewport']) {
       viewport.dispatchEvent(new Event('resize'));
     }, fullViewport);
     await expect(page.locator('html')).toHaveAttribute('data-keyboard', 'closed');
-    await expect(page.locator('.site-footer')).toBeVisible();
+    await expect(page.locator('.site-header')).toBeVisible();
     await expect(page.locator('.site-header')).toHaveCSS('height', `${header!.height}px`);
+    await page.locator('.next-button').click();
     await expect(input).toBeFocused();
   });
 }
@@ -509,7 +558,7 @@ test('random mode resumes independently and can be played again', async ({ page 
   const randomButton = page.getByRole('button', { name:'Random Play', exact:true });
   const dailyBox = await dailyButton.boundingBox(), randomBox = await randomButton.boundingBox();
   expect(randomBox!.y).toBeGreaterThan(dailyBox!.y + dailyBox!.height);
-  expect(await randomButton.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe(await dailyButton.evaluate(el => getComputedStyle(el).backgroundColor));
+  expect(await randomButton.evaluate(el => getComputedStyle(el).color)).not.toBe(await dailyButton.evaluate(el => getComputedStyle(el).color));
   await randomButton.click();
   const firstId = await page.evaluate(async () => (await (await fetch('/api/random')).json()).run.id as string);
   await page.getByRole('button', { name:/Lewati babak/ }).click(); await page.getByRole('button', { name:/Ya, lewati/ }).click();
@@ -530,6 +579,21 @@ test('random mode resumes independently and can be played again', async ({ page 
   await expect(page.getByRole('heading', { name:'Hasil acak' })).toBeVisible();
   await expect(page.getByRole('region', { name:'Perbandingan daily' })).toHaveCount(0);
   await expectFitsScreen(page, ['.results-list','.result-actions','.next-daily']);
+  await expect(page.locator('.random-next')).not.toContainText('Acak');
+  const replay=await page.getByRole('button',{name:'Main lagi',exact:true}).boundingBox();
+  const recap=await page.locator('.results-page').boundingBox();
+  expect(Math.abs(replay!.x+replay!.width/2-recap!.x-recap!.width/2)).toBeLessThan(2);
+  // A fading/disabled button must reveal a gap, rather than a line through its label.
+  const crt=page.getByRole('button',{name:'Efek CRT',exact:true});
+  await crt.click();
+  const replayButton=page.getByRole('button',{name:'Main lagi',exact:true});
+  await replayButton.evaluate(el=>(el as HTMLElement).style.opacity='0');
+  const footer=(await page.locator('.random-next').boundingBox())!;
+  const shot=await page.screenshot({scale:'css'});
+  const pixels=await sharp(shot).extract({left:Math.round(replay!.x)+6,top:Math.round(footer.y+footer.height/2),width:Math.floor(replay!.width)-12,height:2}).removeAlpha().raw().toBuffer();
+  expect(Math.max(...Array.from(pixels).filter((_,index)=>index%3===0))).toBeLessThan(40);
+  await replayButton.evaluate(el=>(el as HTMLElement).style.opacity='');
+  await crt.click();
   await page.getByRole('button', { name:'Main lagi', exact:true }).click();
   const secondId = await page.evaluate(async () => (await (await fetch('/api/random')).json()).run.id as string);
   expect(secondId).not.toBe(firstId);
@@ -559,7 +623,7 @@ test('daily comparison loads real API fields, handles retry and fits small scree
   await page.reload(); await page.getByRole('button', { name:'Lihat hasilmu' }).click();
   const comparison = page.getByRole('region', { name:'Perbandingan daily' });
   await comparison.getByRole('button', { name:'Coba lagi' }).click();
-  await expect(comparison.getByRole('img')).toBeVisible(); await expect(comparison.locator('.histogram-bin.is-you')).toHaveCount(1); await expect(comparison).toContainText('3.333'); await expect(comparison).toContainText('#2'); await expect(comparison).toContainText('50%');
+  await expect(comparison.locator('.comparison-summary')).toHaveCount(3); await expect(comparison).toContainText('3.333'); await expect(comparison).toContainText('#2'); await expect(comparison).toContainText('50%');
   const sizes = testInfo.project.name === 'desktop' ? [{width:1280,height:720},{width:844,height:390}] : [{width:375,height:667},{width:320,height:568},{width:390,height:430}];
   for (const size of sizes) {
     await page.setViewportSize(size);
@@ -586,24 +650,26 @@ for(const score of [600,990]) {
     await expect(page.locator('.flow-progress')).toHaveCount(3);
     for(const [i,value] of [.2,.95,.4].entries()) {
       const branch=page.locator(`[data-connection="${i}"]`);
-      await expect(branch.locator('.flow-progress')).toHaveAttribute('stroke-dasharray',`${value} 1`);
+      await expect(branch.locator('.flow-fill')).toHaveAttribute('stroke-dasharray',`${value} 1`);
       await expect(branch.locator('.flow-progress')).toHaveCount(1);
+      await expect(branch.locator('.flow-progress')).toHaveAttribute('stroke-dasharray','.375 .625');
       await expect(branch.locator('g[mask]')).toHaveCount(0);
-      await expect(branch.locator('.flow-base')).toHaveAttribute('stroke','#d8e5f9');
+      await expect(branch.locator('.flow-base')).toHaveAttribute('stroke','#35304d');
       await expect(page.locator('.clue-strength').nth(i)).toHaveText(`${Math.round(value*100)}% terhubung`);
     }
     await expect(page.locator('.connection-board')).toHaveAttribute('data-reward',score===990?'blue':'none');
     await expectConnectedLines(page);
     await page.screenshot({path:`test-results/${testInfo.project.name}-connection-strength-${score}.png`});
     await page.emulateMedia({reducedMotion:'reduce'});
-    await expect(page.locator('.flow-progress').nth(1)).toHaveAttribute('stroke-dasharray','0.95 1');
+    await expect(page.locator('.flow-fill').nth(1)).toHaveAttribute('stroke-dasharray','0.95 1');
   });
 }
 
 test('perfect answer shakes the cards briefly and respects reduced motion', async ({page},testInfo)=>{
  await page.goto('/');
  await page.getByRole('button',{name:'Main',exact:true}).click();
- await page.evaluate(()=>{
+ await expect(page.locator('.game-paper')).toBeVisible();
+  await page.evaluate(()=>{
   const state={moved:false};(window as any).cardMotion=state;
   const observer=new MutationObserver(()=>{
    document.querySelectorAll('.clue').forEach(el=>{
@@ -620,10 +686,11 @@ test('perfect answer shakes the cards briefly and respects reduced motion', asyn
  else expect(await page.evaluate(()=>(window as any).cardMotion.moved)).toBe(false);
  await expect.poll(()=>page.locator('.clue').first().evaluate(el=>Math.abs(new DOMMatrixReadOnly(getComputedStyle(el).transform).m41))).toBe(0);
  await expect(page.locator('.connection-board')).toHaveAttribute('data-reward','green');
- await expect(page.locator('.answer-node strong')).toHaveCSS('color','rgb(21, 128, 61)');
- await expect(page.locator('.clue').first()).toHaveCSS('background-color','rgb(240, 253, 244)');
- await expect(page.locator('.score-block strong')).toHaveCSS('color','rgb(21, 128, 61)');
- await expect(page.locator('.next-button')).toHaveCSS('background-color','rgb(21, 128, 61)');
+ await expect(page.locator('.answer-node strong')).toHaveCSS('color','rgb(142, 224, 122)');
+ await expect(page.locator('.clue').first()).toHaveCSS('background-color','rgb(21, 33, 23)');
+ await expect(page.locator('.score-block strong')).toHaveCSS('color','rgb(142, 224, 122)');
+ await page.mouse.move(0,0);
+ await expect(page.locator('.next-button')).toHaveCSS('background-color','rgb(142, 224, 122)');
  await page.screenshot({path:`test-results/${testInfo.project.name}-perfect-green.png`});
  if(testInfo.project.name==='desktop') {
   const next=page.locator('.next-button');
@@ -632,4 +699,31 @@ test('perfect answer shakes the cards briefly and respects reduced motion', asyn
   await page.mouse.up();
  }
 
+});
+
+test('long clues and answers stay intact across screen sizes',async({page})=>{
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.route('**/api/runs/*/answers',async route=>{
+    const response=await route.fetch(),run=await response.json();
+    if(run.current?.index===3)run.current.clues=['merah','penghalang','senam'];
+    if(run.results[3])run.results[3].word='pertanggungjawaban';
+    await route.fulfill({response,json:run});
+  });
+  await page.goto('/');await page.getByRole('button',{name:'Main',exact:true}).click();
+  for(let i=0;i<3;i++){
+    await page.getByRole('button',{name:'Lewati babak',exact:true}).click();
+    await page.getByRole('button',{name:/Ya, lewati/}).click();
+    await page.locator('.next-button').click();
+  }
+  await expect(page.locator('.clue strong').nth(1)).toHaveText('penghalang');
+  await expect(page.locator('.clue .micro,.answer-node .micro,.arcade-frame-title')).toHaveCount(0);
+  const sizes=[[1280,720],[390,844],[320,568],[390,430],[844,390]];
+  const fits=()=>page.locator('.connection-board .fit-word').evaluateAll(words=>words.every(word=>{
+    const style=getComputedStyle(word);
+    return word.scrollWidth<=word.clientWidth+1&&word.getBoundingClientRect().height<=parseFloat(style.lineHeight)+1&&parseFloat(style.fontSize)>=9;
+  }));
+  for(const [width,height] of sizes){await page.setViewportSize({width,height});await expect.poll(fits).toBe(true);}
+  await page.getByRole('textbox').fill('biru');await page.getByRole('textbox').press('Enter');
+  await expect(page.locator('.answer-node strong')).toHaveText('pertanggungjawaban');
+  for(const [width,height] of sizes){await page.setViewportSize({width,height});await expect.poll(fits).toBe(true);}
 });

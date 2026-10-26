@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
-import { Cross2Icon, PersonIcon } from '@radix-ui/react-icons';
+import { Cross2Icon, PersonIcon } from './PixelIcons';
 import type { DiscordRoomProgress } from '@nyambung/shared';
 import { api } from './api';
 import { platform } from './platform';

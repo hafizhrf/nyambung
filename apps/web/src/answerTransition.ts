@@ -48,7 +48,7 @@ export function morphAnswerInput(field: HTMLElement, caption: string, perfect: b
       .to(meta, { height:0, marginTop:0, opacity:0, overflow:'hidden', duration:.24, ease:'power3.inOut' }, 0)
       .set([input,submit], { position:'absolute', pointerEvents:'none' }, .12)
       .to(field, { width:Math.min(width,target.width), height:target.height, padding:0, gap:0,
-        borderRadius:6, backgroundColor:color, borderColor:color,
+        borderRadius:0, backgroundColor:color, borderColor:color,
         boxShadow:perfect ? `0 3px 0 ${perfectShadow}` : buttonShadow, duration:.42, ease:'power3.inOut' }, .04)
       .to(label, { opacity:1, y:0, duration:.2, ease:'power2.out' }, .24);
   });

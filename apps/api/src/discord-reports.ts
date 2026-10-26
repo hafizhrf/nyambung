@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Store } from './db.js';
 import { DiscordHttpError, type DiscordService } from './discord.js';
 import { addDays, wibDate } from './time.js';
-import { renderLiveCard, type LiveCard, type CardPlayer } from './discord-card.js';
+import { LIVE_CARD_STYLE_VERSION, renderLiveCard, type LiveCard, type CardPlayer } from './discord-card.js';
 
 interface Report { channel_id:string; date:string; kind:'live'|'recap'; guild_id:string; message_id:string|null; payload:string|null; sent_hash:string|null; uncertain:number; revision?:number; last_bump_at?:number; active_keys?:string }
 interface Standing { discord_id:string; total:number; completed_at:string|null }
@@ -43,14 +43,14 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
   }
   function leaderboard(channelId:string,date=wibDate(clock())) {
     const {all,finished}=summary(channelId,date);
-    return `**Leaderboard Daily · ${date}**\n${ranking(finished)}\n\n${finished.length}/${all.length} pemain selesai. Skor akhir saja.`;
+    return `**Leaderboard Daily · ${date}**\n${ranking(finished)}\n\n${finished.length}/${all.length} pemain selesai.`;
   }
   function recap(channelId:string,date=addDays(wibDate(clock()),-1)) {
     const saved=store.sqlite.prepare(`SELECT payload FROM discord_channel_reports WHERE channel_id=? AND date=? AND kind='recap' AND guild_id=?`).get(channelId,date,config.guildId) as {payload:string|null}|undefined;
     if(saved?.payload)return saved.payload;
     const {all,finished}=summary(channelId,date);
     const average=finished.length?Math.round(finished.reduce((n,row)=>n+row.total,0)/finished.length):0;
-    return `**Recap Daily · ${date}**\n${all.length} pemain · ${finished.length} selesai · ${all.length-finished.length} belum selesai\nRata-rata selesai: ${average.toLocaleString('id-ID')} poin\n\n**Leaderboard akhir**\n${ranking(finished)}\n\nHasil sampai pukul 00.00 WIB. Tanpa jawaban atau petunjuk.`;
+    return `**Recap Daily · ${date}**\n${all.length} pemain · ${finished.length} selesai · ${all.length-finished.length} belum selesai\nRata-rata selesai: ${average.toLocaleString('id-ID')} poin\n\n**Leaderboard akhir**\n${ranking(finished)}\n\nHasil sampai pukul 00.00 WIB.`;
   }
   function activePlayers(channelId:string,date:string) {
     return date===wibDate(clock()) ? store.sqlite.prepare(`SELECT r.id AS run_id,i.name,i.avatar,p.discord_id,r.mode,r.date,d.number,r.completed_at,COUNT(a.stage) AS stages,COALESCE(SUM(CAST(json_extract(a.result,'$.score') AS INTEGER)),0) AS total
@@ -65,7 +65,7 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
     const lines=players.slice(0,12).map(p=>`${mention(p.discord_id)} · ${p.mode==='random'?'Acak':p.mode?`${p.date!==date?'Arsip':'Daily'} #${String(p.number??0).padStart(3,'0')}`:'Lobi'} · ${p.completed_at?'Selesai':p.mode?`Babak ${Math.min(5,p.stages+1)}/5`:'Siap main'}`);
     if(players.length>12)lines.push(`+${players.length-12} pemain lain`);
     const {all,finished}=summary(channelId,date);
-    return `**Nyambung · ${date}**\n**Sedang main · ${players.length} pemain**\n${lines.join('\n')||'Belum ada pemain aktif.'}\n\n**Leaderboard Daily**\n${ranking(finished,5)}\n\n${finished.length}/${all.length} pemain Daily selesai. Progres diperbarui berkala.`;
+    return `**Nyambung · ${date}**\n**Sedang main · ${players.length} pemain**\n${lines.join('\n')||'Belum ada pemain aktif.'}\n\n**Leaderboard Daily**\n${ranking(finished,5)}\n\n${finished.length}/${all.length} pemain Daily selesai.`;
   }
   function stageScores(runId:string):number[] {
     const scores=Array<number>(5).fill(0);
@@ -115,8 +115,8 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
     const lastBump=row.last_bump_at||birth;
     const canBump=!!card && !!row.message_id && !row.uncertain && joined && now-lastBump>=600000;
     const body={content:`${content}\n-# ${marker(row)}`,allowed_mentions:{parse:[]},flags:4096,
-      ...(card?{components:[{type:1,components:[{type:2,style:1,label:'Play',custom_id:'nyambung:play'}]}],attachments:[{id:0,filename:'nyambung-live.png',description:'Pemain Nyambung dan progres babak, tanpa jawaban.'}]}:{})};
-    let digest=hash(JSON.stringify({body,card}));
+      ...(card?{components:[{type:1,components:[{type:2,style:1,label:'Play',custom_id:'nyambung:play'}]}],attachments:[{id:0,filename:'nyambung-live.png',description:'Pemain Nyambung dan progres babak.'}]}:{})};
+    let digest=hash(JSON.stringify({body,card,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
     if(row.sent_hash===digest && !canBump){
       if(card)store.sqlite.prepare('UPDATE discord_channel_cards SET active_keys=? WHERE channel_id=? AND sent_hash IS ? AND lease_until<=?').run(JSON.stringify(keys),row.channel_id,row.sent_hash,now);
       return;
@@ -131,7 +131,7 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
         store.sqlite.prepare('UPDATE discord_channel_cards SET message_id=NULL,revision=?,uncertain=1 WHERE channel_id=?').run(row.revision,row.channel_id);
         messageId=null;bumped=true;
         body.content=`${content}\n-# ${marker(row)}`;
-        digest=hash(JSON.stringify({body,card}));
+        digest=hash(JSON.stringify({body,card,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
       }
       const file=card?{name:'nyambung-live.png',data:await renderLiveCard(card)}:undefined;
       if(!messageId&&row.uncertain&&!bumped)messageId=await findExisting(row);

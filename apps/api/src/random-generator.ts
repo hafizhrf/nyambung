@@ -1,4 +1,6 @@
 import { bridgeSeparation } from './bridge-quality.js';
+import { familyMatcher, isDerivedForm } from './word-family.js';
+import { spellingVariants } from '../../../content/spelling-variants.js';
 import { profileFor,semanticSimilarity,type PackedVectors } from './vector-index.js';
 import { selectRetrievedRounds, type RetrievalContext } from './retrieval.js';
 import type { StageKind } from '@nyambung/shared';
@@ -133,6 +135,8 @@ export function reviewedAnswers(data:RandomGenerator,clues:string[]):string[] {
   return match(0,new Set());
  }).flatMap(i=>[data.relations![i].answer,...(data.relations![i].variants??[])]))].filter(word=>!clues.includes(word));
 }
+// Applied at answer time to every edition; stored answers keep their original scores.
+const BLIND_LINK=.35, PROXY_WEIGHT=.8, FAMILY_SCORE=950, FAMILY_SIMILARITY=.6;
 function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):PublishedStage|null {
   if (!['bridge2','bridge3'].includes(round.kind) || round.clues.length!==(round.kind==='bridge3'?3:2) || new Set(round.clues).size!==round.clues.length) return null;
   const approved=new Set(reviewedAnswers(data,round.clues));
@@ -144,6 +148,24 @@ function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):Publi
   const p=profiles as ClueProfile[], connections=p.map(profile=>strengths(profile,calibrated));
   const harmonic=(values:number[])=>values.some(value=>value<=0)?0:values.length/values.reduce((sum,value)=>sum+1/value,0);
   const scores:Record<string,ScoreEntry>={};
+  // Roots include reviewed spellings (bernafas → nafas → napas) and the base of
+  // -an nouns (melukis → lukis → lukisan). The similarity gate below rejects
+  // forms whose sense drifted.
+  const roots=[...approved].flatMap(spellingVariants).flatMap(word=>word.endsWith('an')&&word.length>5?[word,word.slice(0,-2)]:[word]);
+  const ofReference=(word:string)=>roots.some(root=>word===root||isDerivedForm(word,root));
+  const ofClue=familyMatcher(round.clues.flatMap(spellingVariants));
+  // A clue is blind when the embedding cannot see its link to the reference
+  // answer (tarik → napas is a collocation). For such clues, a word's closeness
+  // to the reference answer stands in for its missing link, so udara/oksigen get
+  // partial credit while words tied to only one clue (mencabut, parut) do not.
+  const {indexes}=lookup(data);
+  const anchor=round.target&&approved.has(round.target)?round.target:[...approved].sort((a,b)=>{
+    const sum=(word:string)=>{const i=indexes.get(word);return i===undefined?-1:connections.reduce((total,values)=>total+values[i],0);};
+    return sum(b)-sum(a);
+  })[0];
+  const anchorIndex=indexes.get(anchor), anchorProfile=anchorIndex===undefined?undefined:profileFor(data,anchor);
+  const blind=connections.map(values=>anchorIndex!==undefined&&values[anchorIndex]<BLIND_LINK);
+  const proxy=anchorProfile&&blind.some(Boolean)?strengths(anchorProfile,calibrated):undefined;
   let best='', bestValue=-1;
   for (let i=0;i<data.words.length;i++) {
     const word=data.words[i]; if (round.clues.includes(word)) continue;
@@ -153,10 +175,21 @@ function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):Publi
     if (approved.has(word)) for(let j=0;j<values.length;j++) values[j]=Math.max(calibrated?(variants.has(word)?.98:1):.94,values[j]);
     const value=harmonic(values);
     if (approved.has(word) && value>bestValue) {best=word;bestValue=value;}
+    let scored=value, inherited=false;
+    if (!approved.has(word)) {
+      if (proxy && blind.some((isBlind,j)=>isBlind&&values[j]<PROXY_WEIGHT*proxy[i]) && !ofClue(word))
+        scored=harmonic(values.map((value,j)=>blind[j]?Math.max(value,PROXY_WEIGHT*proxy[i]):value));
+      // Forms and reviewed spellings of a reference answer (bernapas, nafas for
+      // napas) inherit near-reference credit, unless they are forms of a clue.
+      // An affix can shift sense (kembang → berkembang), so the form must also stay
+      // close in meaning to the reference answer.
+      inherited=!!anchorProfile && anchorProfile.similarities[i]>=FAMILY_SIMILARITY && ofReference(word) && !ofClue(word);
+    }
     // Dictionary membership alone is not semantic evidence. Surface forms
     // without a lexical record remain playable, with lower confidence.
     const confidence=calibrated&&!lexical.has(word)?.6:1;
-    scores[word]={score:Math.min(949,Math.round(949*value*confidence)),connections:values.map(value=>Math.round(value*1000)/1000),similarities:p.map(profile=>profile.similarities[i])};
+    const score=Math.min(949,Math.round(949*scored*confidence));
+    scores[word]={score:inherited?Math.max(score,FAMILY_SCORE):score,connections:values.map(value=>Math.round(value*1000)/1000),similarities:p.map(profile=>profile.similarities[i])};
   }
   if(data.version>=3 && round.target && scores[round.target]) {best=round.target;bestValue=harmonic(scores[best].connections);}
   if (!best) return null;

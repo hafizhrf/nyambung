@@ -240,3 +240,37 @@ it('requires independent strong evidence for automatic Wordnet bridges while pre
   automatic.profiles[0].similarities[index]=.2;
   expect(evaluateRound(automatic,round)).toBeNull();
 });
+
+function blindClueFixture():RandomGenerator {
+  // paru + tarik → napas: the embedding cannot see tarik → napas (a collocation).
+  const words=['paru','tarik','napas','nafas','bernapas','udara','mencabut','menarik','parut','meja'];
+  const sims=(values:Record<string,number>)=>words.map(word=>values[word]??0);
+  return {version:3,words,answers:['napas'],relations:[{answer:'napas',facets:[['paru'],['tarik']]}],excludedCombos:[],profiles:[
+    {word:'paru',baseline:0,reference:1,similarities:sims({paru:1,napas:.5,nafas:.5,bernapas:.5,udara:.6,parut:.9})},
+    {word:'tarik',baseline:0,reference:1,similarities:sims({tarik:1,napas:-.01,mencabut:.9,menarik:.95})},
+    {word:'napas',baseline:0,reference:1,similarities:sims({napas:1,nafas:.9,bernapas:.9,udara:.7})},
+  ]};
+}
+it('credits forms of the reference answer and stands in for a blind clue without promoting one-clue words',()=>{
+  const stage=evaluateRound(blindClueFixture(),{kind:'bridge2',clues:['paru','tarik'],target:'napas'})!;
+  expect(stage.scores.napas.score).toBe(1000);
+  // Affixed form and reviewed spelling of the reference answer.
+  expect(stage.scores.bernapas.score).toBe(950);
+  expect(stage.scores.nafas.score).toBe(950);
+  expect(stage.scores.bernapas.rank).toBe(2);
+  // Close to paru and to napas: no longer zeroed by the blind tarik link.
+  expect(stage.scores.udara.score).toBeGreaterThan(500);
+  expect(stage.scores.udara.score).toBeLessThan(950);
+  // The UI still reports the raw link honestly.
+  expect(stage.scores.udara.connections[1]).toBe(0);
+  // Tied to only one clue, or a form of a clue: no stand-in credit.
+  for(const word of ['mencabut','menarik','parut','meja']) expect(stage.scores[word].score).toBe(0);
+  expect(evaluateRound(blindClueFixture(),{kind:'bridge2',clues:['paru','tarik'],target:'napas'})).toEqual(stage);
+});
+it('leaves rounds whose clues all see the reference answer unchanged',()=>{
+  const data=blindClueFixture();
+  data.profiles[1].similarities[data.words.indexOf('napas')]=.6;
+  const stage=evaluateRound(data,{kind:'bridge2',clues:['paru','tarik'],target:'napas'})!;
+  expect(stage.scores.udara.score).toBe(0);
+  expect(stage.scores.bernapas.score).toBe(950);
+});

@@ -24,3 +24,11 @@ it('blocks collisions between clues even when the answer has a different root',(
  const bad={...data,relations:relations.slice(0,3)};
  expect(retrieveCandidates(bad,'bridge2',trainDifficulty([]),new Set())).toEqual([]);
 });
+
+import { isDerivedForm } from '../apps/api/src/word-family.js';
+it('recognizes strict affixed forms of a root without loose stemming',()=>{
+  for(const [word,root] of [['bernapas','napas'],['pernapasan','napas'],['menyapu','sapu'],['mengupas','kupas'],['memukul','pukul'],['menulis','tulis'],['melukis','lukis'],['dilukiskan','lukis'],['bercermin','cermin'],['kebakaran','bakar'],['memperketat','ketat'],['berenang','renang']] as const)
+    expect(isDerivedForm(word,root),`${word} ← ${root}`).toBe(true);
+  for(const [word,root] of [['kapasitas','kapas'],['koperasi','koper'],['petai','peta'],['terasi','teras'],['gulai','gula'],['dadakan','dada'],['mengempit','sempit'],['belanda','beranda'],['tanduk','tandu'],['napas','napas'],['arsipelago','arsip']] as const)
+    expect(isDerivedForm(word,root),`${word} ← ${root}`).toBe(false);
+});

@@ -154,6 +154,21 @@ dan jawaban acuan. Sinonim setara (lelah/letih/capek/penat) mendapat 1.000; teta
 embedding tanpa bukti dibatasi 949. Aturan ini berlaku untuk kompilasi Daily dan
 deskriptor Acak baru, tanpa mengubah tabel atau jawaban edisi yang sudah dimainkan.
 
+Babak penghubung juga menerapkan dua koreksi saat jawaban dinilai, berlaku untuk
+semua edisi generator v2–v4 dan Daily ber-`scoringRef`; jawaban yang sudah
+tersimpan tidak dihitung ulang.
+- **Bentuk jawaban acuan.** Bentuk berimbuhan dari kata dasar yang persis sama
+  (bernapas/pernapasan untuk napas, melukis untuk lukisan) dan varian ejaan yang
+  ditinjau di `content/spelling-variants.ts` (nafas/napas) mendapat 950. Syaratnya:
+  imbuhan baku dengan peluluhan meN-/peN-, `-kan`/`-i` hanya bersama awalan, tanpa
+  akhiran serapan (kapas ≠ kapasitas, peta ≠ petai), cosine ke jawaban acuan minimal
+  0,6 (kembang ≠ berkembang), dan bukan bentuk dari salah satu petunjuk.
+- **Petunjuk buta.** Bila embedding tidak melihat hubungan suatu petunjuk dengan
+  jawaban acuannya (koneksi < 0,35, misalnya kolokasi tarik → napas), koneksi kata
+  ke petunjuk itu diganti 0,8 × kedekatannya ke jawaban acuan, jika lebih besar.
+  Jadi udara/oksigen tidak lagi bernilai 0, sedangkan kata yang hanya dekat ke satu
+  petunjuk (mencabut, parut) tidak naik. Persentase koneksi di layar tetap nilai asli.
+
 Perbandingan daily di rekap menampilkan jumlah sesi selesai, rata-rata, dan peringkat pada **tanggal dan versi soal yang sama**. Peringkat seri dibagi; persentase menghitung pemain lain dengan skor lebih rendah, tidak memasukkan diri sendiri. Sesi acak, demo, belum selesai, dan sesi yang digantikan tidak ikut dihitung. Statistik memakai identitas cookie anonim, sehingga menghapus cookie dapat membuat identitas baru. Data kosong tidak diisi dengan angka contoh.
 
 API tambahan: `GET /api/random`, `POST /api/random/runs`, dan `GET /api/runs/:id/comparison`. Semua sesi tetap memakai endpoint pemulihan dan jawaban yang sama. Migrasi database v3 mempertahankan ID sesi/jawaban, memisahkan constraint sesi daily dan acak, serta memeriksa foreign key dalam transaksi. Backup database sebelum pembaruan produksi.

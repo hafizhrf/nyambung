@@ -5,6 +5,8 @@ import {
   type BrowserContext,
   type Page,
 } from "@playwright/test";
+import {readFileSync} from "node:fs";
+const lexicon=JSON.parse(readFileSync(new URL("../../content/lexicon.json",import.meta.url),"utf8")) as string[];
 import { randomStages } from "../../content/random";
 import type { RoomView } from "@nyambung/shared";
 test.skip(
@@ -17,6 +19,7 @@ async function setup(
   mode: string,
   count = 2,
   mobile = false,
+  animated = false,
 ) {
   const contexts: BrowserContext[] = [],
     pages: Page[] = [];
@@ -27,7 +30,7 @@ async function setup(
         : { width: 1280, height: 800 },
       isMobile: mobile,
       hasTouch: mobile,
-      reducedMotion: "reduce",
+      reducedMotion: animated ? "no-preference" : "reduce",
     });
     contexts.push(context);
     await context.request.post("/api/mabar/profile", {
@@ -84,6 +87,7 @@ for (const mode of ["quick", "word", "chain"])
       mode,
       mode === "chain" ? 3 : 2,
       testInfo.project.name === "mobile",
+      mode === "word",
     );
     try {
       await g.pages[0].screenshot({
@@ -164,20 +168,55 @@ for (const mode of ["quick", "word", "chain"])
         );
         const turn = selves.indexOf(current.match!.turn!);
         const waiting = g.pages[1 - turn];
+        const chooseWord=(view:RoomView)=>lexicon.find(word=>/^[a-z]{2,32}$/.test(word)&&word.startsWith(view.match!.requiredPrefix!)&&!view.match!.used!.includes(word))!;
+        const initialWord=chooseWord(current);
+        await expect(g.pages[turn].locator('.word-suffixes b')).toHaveCount(1);
+        await expect(g.pages[turn].locator('.word-suffixes b')).toHaveText(current.match!.requiredPrefix!.toUpperCase());
         await expect(waiting.getByText("Tunggu giliranmu", { exact: false })).toBeVisible();
         await g.pages[turn]
           .getByRole("textbox", { name: "Jawaban mabar" })
-          .fill("hujan");
+          .fill(initialWord);
         await g.pages[turn].getByRole("button", { name: "Kirim", exact: true }).click();
         await expect.poll(async () => (await g.snapshot()).match!.turn).toBe(
           selves[1 - turn],
         );
         await expect(waiting.getByText("Giliranmu!", { exact: true })).toBeVisible();
-        await expect(waiting.locator(".used-words")).toContainText("hujan");
+        await expect(waiting.locator(".used-words")).toContainText(initialWord);
+        const field=waiting.getByRole('textbox',{name:'Jawaban mabar'});
+        await field.evaluate(el=>{const node=el as HTMLInputElement,animate=node.animate.bind(node);node.animate=(...args)=>{node.dataset.shakes=String(Number(node.dataset.shakes??0)+1);return animate(...args);};});
+        const beforeRetry=(await g.snapshot()).match!;
+        await field.fill('rumah');await waiting.getByRole('button',{name:'Kirim',exact:true}).click();
+        await expect(waiting.getByRole('alert')).toContainText('sudah dipakai');
+        await expect(field).toHaveValue('rumah');await expect(field).toBeFocused();
+        await expect(field).toHaveAttribute('aria-invalid','true');await expect(field).toHaveAttribute('data-shakes','1');
+        expect((await g.snapshot()).match!.lives).toEqual(beforeRetry.lives);
+        expect((await g.snapshot()).match!.deadline).toBe(beforeRetry.deadline);
+        await field.fill(chooseWord(await g.snapshot()));await waiting.getByRole('button',{name:'Kirim',exact:true}).click();
+        await expect.poll(async()=>(await g.snapshot()).match!.turn).toBe(selves[turn]);
+        await g.pages[turn].getByRole('textbox',{name:'Jawaban mabar'}).fill(chooseWord(await g.snapshot()));
+        await g.pages[turn].getByRole('button',{name:'Kirim',exact:true}).click();
+        await expect.poll(async()=>(await g.snapshot()).match!.turn).toBe(selves[1-turn]);
+
         await g.advance(11000);
         await g.phase("reveal");
-        await expect(g.pages[turn].locator(".reveal-answer")).toContainText("gugur");
-        await g.advance(3001);
+        await expect(g.pages[turn].locator(".reveal-answer")).toContainText("kehilangan 1 nyawa");
+        await expect(waiting.locator('.word-failure-details')).toContainText('Tidak mengirim jawaban');
+        await expect(waiting.locator('.word-failure-examples b').first()).toBeVisible();
+        expect((await g.snapshot()).match!.lives![selves[1-turn]]).toBe(1);
+        await expect(waiting.getByRole('img',{name:`Nyawa Tamu ${1-turn}: 1 dari 2 nyawa`,exact:true})).toBeVisible();
+        await g.advance(5001);await g.phase('playing');
+        await g.pages[turn].getByRole('textbox',{name:'Jawaban mabar'}).fill(chooseWord(await g.snapshot()));
+        await g.pages[turn].getByRole('button',{name:'Kirim',exact:true}).click();
+        await expect.poll(async()=>(await g.snapshot()).match!.turn).toBe(selves[1-turn]);
+        await waiting.getByRole('textbox',{name:'Jawaban mabar'}).fill('zzzzzzzz');
+        await waiting.getByRole('button',{name:'Kirim',exact:true}).click();
+        await g.phase('reveal');
+        await expect(g.pages[turn].locator('.failed-attempt')).toHaveText('zzzzzzzz');
+        await expect(g.pages[turn].locator('.word-failure-examples b').first()).toBeVisible();
+        await g.pages[turn].screenshot({path:`test-results/mabar-word-failure-${testInfo.project.name}.png`});
+        await expect(g.pages[turn].locator('.reveal-answer')).toContainText('gugur');
+        expect((await g.snapshot()).match!.lives![selves[1-turn]]).toBe(0);
+        await g.advance(5001);
       } else {
         const total = (await g.snapshot()).match!.total;
         for (let n = 0; n < total; n++) {
@@ -223,6 +262,10 @@ for (const mode of ["quick", "word", "chain"])
               .getByRole("textbox", { name: "Jawaban mabar" })
               .fill(stage.best);
             await p.getByRole("button", { name: "Kirim", exact: true }).click();
+            if(p===g.pages[0])for(const viewer of g.pages){
+              await expect(viewer.locator('.mabar-player').filter({hasText:'Tamu 0'}).locator('.player-answered')).toContainText('Sudah nebak');
+              await expect(viewer.locator('.player-answered')).toHaveCount(1);
+            }
           }
           // Everyone answered, so the round reveals without waiting for the timer.
           await g.phase("reveal");
@@ -230,7 +273,7 @@ for (const mode of ["quick", "word", "chain"])
             stage.best,
           );
           await g.advance(6001);
-          if (n + 1 < total) await g.phase("playing");
+          if (n + 1 < total) {await g.phase("playing");await expect(g.pages[0].locator(".player-answered")).toHaveCount(0);}
         }
       }
       await g.phase("results");
@@ -277,6 +320,14 @@ test("web lobby creates a password room and supports narrow screens", async ({
   await page.getByRole("button", { name: "Buat dan masuk" }).click();
   await expect(page.getByRole("heading", { name: roomName })).toBeVisible();
   await expect(page.locator(".mabar-heading [role=status]")).toHaveText("Live");
+  const guide = page.locator('.mode-guide');
+  await expect(guide.locator('.guide-rules')).not.toBeVisible();
+  await expect(page.locator('.guide-facts')).toBeVisible();
+  await expect(page.getByRole('button',{name:'Siap',exact:true})).toBeVisible();
+  await guide.locator('summary').click();
+  await expect(guide.locator('.guide-rules')).toBeVisible();
+  await guide.locator('summary').press('Enter');
+  await expect(guide.locator('.guide-rules')).not.toBeVisible();
   for (const [width, height] of [
     [320, 568],
     [390, 844],
@@ -302,7 +353,7 @@ test("web lobby creates a password room and supports narrow screens", async ({
   await expect(page.getByText(roomName)).toHaveCount(0);
 });
 
-test("Discord SDK opens the verified shared lobby and PiP hides private input", async ({
+test("Discord SDK defaults to Daily and opens the shared lobby from Mabar", async ({
   browser,
 }, testInfo) => {
   // A fresh Activity instance per project keeps earlier matches out of this lobby.
@@ -334,6 +385,9 @@ test("Discord SDK opens the verified shared lobby and PiP hides private input", 
       });
       await page.goto("/mabar-discord-test");
       const frame = page.frameLocator("#activity");
+      await expect(frame.getByRole("textbox", { name: "SATU KATA VERSIMU" })).toBeVisible();
+      await expect(frame.getByRole("button", { name: "Solo", exact: true })).toHaveAttribute("aria-pressed", "true");
+      await frame.getByRole("button", { name: "Mabar", exact: true }).click();
       await expect(
         frame.getByRole("heading", { name: "Mabar Nyambung" }),
       ).toBeVisible();
@@ -399,7 +453,7 @@ test('mode selector stays in the arcade header without splitting the home layout
   await page.goto('/');
   const selector=page.getByRole('navigation',{name:'Pilihan permainan'});
   await expect(page.locator('.site-header').getByRole('navigation',{name:'Pilihan permainan'})).toBeVisible();
-  for(const [width,height] of [[1280,800],[844,390],[390,844],[320,568]]){
+  for(const [width,height] of [[1280,800],[844,390],[390,844],[320,568],[390,430],[320,430]]){
     await page.setViewportSize({width,height});
     await expect.poll(()=>selector.evaluate(el=>{const header=el.closest('header')!.getBoundingClientRect(),box=el.getBoundingClientRect();return box.top>=header.top-1&&box.bottom<=header.bottom+1&&header.right<=innerWidth&&el.scrollWidth<=el.clientWidth+1;})).toBe(true);
     await expect(page.getByRole('button',{name:'Main',exact:true})).toBeInViewport();
@@ -453,4 +507,26 @@ test('room controls use pixel menus and stay aligned on narrow screens', async (
   await page.getByLabel('Nama room', {exact:true}).fill('Room Pixel');
   await page.getByRole('button', {name:'Buat dan masuk',exact:true}).click();
   await expect(page.getByRole('heading', {name:'Room Pixel'})).toBeVisible();
+});
+
+
+test('CRT Mabar transitions preserve a focused draft across live timer updates',async({browser})=>{
+  const g=await setup(browser,'quick',2,false,true);
+  try{
+    for(const page of g.pages)await page.getByRole('button',{name:'Siap',exact:true}).click();
+    await g.pages[0].getByRole('button',{name:'Mulai',exact:true}).click();
+    await g.phase('countdown');await g.advance(3001);await g.phase('playing');
+    const page=g.pages[0],input=page.getByRole('textbox',{name:'Jawaban mabar'});
+    await expect(input).toBeVisible();
+    await expect(page.locator('.mabar-page')).toHaveAttribute('data-scene-state','idle');
+    await input.fill('tetap');
+    await page.evaluate(()=>{
+      (window as any).__mabarSceneReentries=0;
+      const scene=document.querySelector('.mabar-page')!;
+      new MutationObserver(()=>{if(scene.getAttribute('data-scene-state')==='entering')(window as any).__mabarSceneReentries++;}).observe(scene,{attributes:true,attributeFilter:['data-scene-state']});
+    });
+    await page.waitForTimeout(1100);
+    await expect(input).toHaveValue('tetap');await expect(input).toBeFocused();
+    expect(await page.evaluate(()=>(window as any).__mabarSceneReentries)).toBe(0);
+  }finally{await g.close();}
 });

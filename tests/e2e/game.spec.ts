@@ -751,3 +751,55 @@ test('long clues and answers stay intact across screen sizes',async({page})=>{
   await expect(page.locator('.answer-node strong')).toHaveText('pertanggungjawaban');
   for(const [width,height] of sizes){await page.setViewportSize({width,height});await expect.poll(fits).toBe(true);}
 });
+
+for (const selectedMode of ['daily','random'] as const) test(`only the ${selectedMode} start button shows loading and resets after failure`,async({page})=>{
+  const endpoint=selectedMode==='random'?'**/api/random/runs':'**/api/runs';
+  let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;});
+  await page.route(endpoint,async route=>{await pending;await route.fulfill({status:503,json:{error:'Uji pemuatan gagal'}});});
+  try{
+    await page.goto('/');
+    const selected=page.locator(selectedMode==='random'?'.lobby-random':'.lobby-play');
+    const other=page.locator(selectedMode==='random'?'.lobby-play':'.lobby-random');
+    await expect(selected).toBeEnabled();await selected.click();
+    await expect(selected).toHaveAttribute('aria-busy','true');await expect(selected.locator('.spin')).toHaveCount(1);
+    await expect(other).toHaveAttribute('aria-busy','false');await expect(other.locator('.spin')).toHaveCount(0);
+    await expect(other).toBeDisabled();
+    release();await expect(page.getByRole('alert')).toContainText('Uji pemuatan gagal');
+    await expect(selected).toHaveAttribute('aria-busy','false');await expect(selected.locator('.spin')).toHaveCount(0);
+    await expect(selected).toBeEnabled();await expect(other).toBeEnabled();
+    await page.unroute(endpoint);await selected.click();
+    await expect(page.getByRole('textbox',{name:'SATU KATA VERSIMU'})).toBeVisible();
+    await expect(page.locator('.game-mode')).toContainText(selectedMode==='random'?'Acak':'Daily');
+  }finally{release();}
+});
+
+test('completed-round top five words open separately, retry errors and survive resume',async({page})=>{
+  await page.goto('/');await page.getByRole('button',{name:'Main',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Lihat 5 kata terbaik'})).toHaveCount(0);
+  await page.getByRole('textbox',{name:'SATU KATA VERSIMU'}).fill('restoran');await page.getByRole('textbox',{name:'SATU KATA VERSIMU'}).press('Enter');
+  await expect(page.locator('.result-meta .rank-note')).toBeVisible();await expect(page.locator('.score-block .rank-note')).toHaveCount(0);
+  let attempts=0;
+  await page.route('**/api/runs/*/stages/0/top-answers',async route=>{if(++attempts===1)await route.fulfill({status:503,json:{error:'Sementara gagal'}});else await route.continue();});
+  await page.getByRole('button',{name:'Lihat 5 kata terbaik'}).click();
+  const dialog=page.getByRole('dialog',{name:'5 kata terbaik'});
+  await expect(dialog.getByRole('alert')).toContainText('belum bisa dimuat');await dialog.getByRole('button',{name:'Coba lagi'}).click();
+  await expect(dialog.locator('.top-answers-list li')).toHaveCount(5);
+  await expect(dialog.locator('.top-answers-list li').first()).toContainText('restoran');
+  for(const viewport of [{width:320,height:568},{width:844,height:390}]){
+    await page.setViewportSize(viewport);
+    expect(await dialog.evaluate(el=>el.scrollWidth<=el.clientWidth+1)).toBe(true);
+  }
+  await dialog.getByRole('button',{name:'Tutup',exact:true}).click();await page.reload();
+  await page.getByRole('button',{name:'Lanjutkan bermain',exact:true}).click();await page.getByRole('button',{name:'Lihat 5 kata terbaik'}).click();
+  await expect(page.getByRole('dialog').locator('.top-answers-list li')).toHaveCount(5);
+  await page.getByRole('dialog').getByRole('button',{name:'Tutup',exact:true}).click();
+  await page.locator('.next-button').click();
+  for(let stage=1;stage<5;stage++){
+    await page.getByRole('button',{name:'Lewati babak',exact:true}).click();
+    await page.getByRole('button',{name:'Ya, lewati',exact:true}).click();
+    await page.locator('.next-button').click();
+  }
+  await expect(page.getByRole('heading',{name:'Hasil daily',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Lihat 5 kata terbaik babak 1',exact:true}).click();
+  await expect(page.getByRole('dialog').locator('.top-answers-list li')).toHaveCount(5);
+});

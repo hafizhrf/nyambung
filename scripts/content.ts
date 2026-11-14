@@ -1,3 +1,4 @@
+import {qualifyBridgeScoring} from './bridge-scoring.js';
 import {packVectors} from '../apps/api/src/vector-index.js';
 import {compileLexicalBank} from './lexical-bank.js';
 import { createHash, randomInt } from 'node:crypto';
@@ -7,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { eq } from 'drizzle-orm';
 import { openDatabase, type Store } from '../apps/api/src/db.js';
 import { daily, embeddings, puzzleVersions, randomPool } from '../apps/api/src/schema.js';
-import { compileStage, compileRandomSynonym, centerVectors, cosine, fingerprint, FORMULA, type Snapshot } from '../apps/api/src/scoring.js';
+import { compileStage, compileRandomSynonym, reviewClosestStage, centerVectors, cosine, fingerprint, FORMULA, type Snapshot } from '../apps/api/src/scoring.js';
 import { inspectBridge, bridgeSeparation } from '../apps/api/src/bridge-quality.js';
 import { addDays, wibDate } from '../apps/api/src/time.js';
 import { reviewedBridges } from '../content/relations.js';
@@ -73,6 +74,7 @@ export function compileRandomPool(store: Store, demo = false, generated = !demo)
     generator={version:4,facetPolicy:'distinct-roles-v1',bridgePolicy:'cross-context-v1',packed:packVectors(words,vectors),words,answers:[],relations:reviewedBridges,profiles:[],excludedCombos:[...puzzles.flat(),...randomStages].map(stage=>combinationKey(stage.clues))};
     const lexical=compileLexicalBank(generator);
     generator.relations=[...reviewedBridges,...lexical.relations];
+    qualifyBridgeScoring(generator);
     generator.answers=generator.relations.map(relation=>relation.answer);
     const human=randomStages.filter(stage=>stage.kind==='closest').map(stage=>({...stage,concept:lexical.synonyms.find(other=>other.clues[0]===stage.clues[0])?.concept}));
     const known=new Set(human.map(stage=>stage.clues[0]));
@@ -82,7 +84,7 @@ export function compileRandomPool(store: Store, demo = false, generated = !demo)
     if(required.some(word=>!wordSet.has(word)||blocked.includes(word))) throw Error('Bank leksikal mengandung kata yang belum tersedia.');
     if(generator.relations.length<3||stages.length<100) throw Error('Bank leksikal belum cukup untuk publikasi.');
   }
-  return {version:1,model,formula:generator?'packed-wordnet-ridge-harmonic-v4':demo?'curated-demo-v1':FORMULA,vocabularyHash:fingerprint(words),aliases,blocked,...(generator?{generator}:{}),stages:stages.map(stage=>generator?{...stage,scores:{},vocabularySize:words.length-stage.clues.length}:compileStage(stage,words,demo?undefined:vectors))};
+  return {version:1,model,formula:generator?'packed-wordnet-ridge-harmonic-v4/grounded-bridge-v1/reviewed-closest-v1':demo?'curated-demo-v1':FORMULA,vocabularyHash:fingerprint(words),aliases,blocked,...(generator?{generator}:{}),stages:stages.map(stage=>generator?{...reviewClosestStage(stage,new Set(words)),scores:{},vocabularySize:words.length-stage.clues.length}:compileStage(stage,words,demo?undefined:vectors))};
 }
 
 export function publishRandomPool(store: Store, snapshot: Snapshot, demo = false) {
@@ -112,14 +114,17 @@ export function requalifyPublishedRandomPool(store: Store): Snapshot {
   // Retain source-backed senses from earlier editions. The runtime quality
   // gate still rejects trivial clues; rebuilding must not discard valid puzzles.
   generator.relations=[...new Map([...generator.relations,...previousLexical,...relations].map(relation=>[JSON.stringify(relation),relation])).values()];
+  qualifyBridgeScoring(generator);
   generator.answers=[...new Set(generator.relations.map(relation=>relation.answer))];
   const human=randomStages.filter(stage=>stage.kind==='closest').map(stage=>({...stage,concept:synonyms.find(other=>other.clues[0]===stage.clues[0])?.concept}));
   const known=new Set(human.map(stage=>stage.clues[0]));
-  snapshot.stages=[...human,...synonyms.filter(stage=>!known.has(stage.clues[0]))].map(stage=>({...stage,scores:{},vocabularySize:snapshot.generator!.words.length-1}));
+  snapshot.stages=[...human,...synonyms.filter(stage=>!known.has(stage.clues[0]))].map(stage=>({...reviewClosestStage(stage,available),scores:{},vocabularySize:snapshot.generator!.words.length-1}));
 
   snapshot.generator.excludedCombos = [...new Set([...snapshot.generator.excludedCombos, ...puzzles.flat().map(stage => combinationKey(stage.clues))])];
   if (!snapshot.formula.includes('/cross-context-v1')) snapshot.formula += '/cross-context-v1';
   if (!snapshot.formula.includes('/reviewed-meanings-v1')) snapshot.formula += '/reviewed-meanings-v1';
+  if (!snapshot.formula.includes('/grounded-bridge-v1')) snapshot.formula += '/grounded-bridge-v1';
+  if (!snapshot.formula.includes('/reviewed-closest-v1')) snapshot.formula += '/reviewed-closest-v1';
   return snapshot;
 }
 export function retireUnstartedTrivialRuns(store: Store, timestamp = new Date().toISOString()) {

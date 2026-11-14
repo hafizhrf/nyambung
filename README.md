@@ -134,6 +134,26 @@ Embedding Jina seluruh kosakata disimpan sebelum publish. Gameplay tidak menghub
 
 Jawaban sumber mendapat koreksi koneksi minimal 0,94; harmonic mean menentukan skor relatif terhadap penghubung yang dipilih dengan bukti relasi. Seluruh kamus tetap dinilai secara kontinu dari embedding (0–949 untuk jawaban tanpa bukti kurasi/leksikal). Sinonim tambahan dibatasi pada anggota synset yang lolos filter similarity dan antonim dikecualikan. Model tidak mengarang kata atau memaksakan imbuhan untuk memperbesar kamus. Hub kata baru dan ID sense yang belum pernah dilihat diprioritaskan; variasi sinonim dari konsep yang sama tidak dianggap kebaruan penuh. Babak terakhir juga menghindari 20 kelompok makna terakhir bila ada alternatif, sembari mempertahankan rotasi clue. Skor dan sesi lama tetap tersimpan dan dapat diselesaikan.
 
+Edisi acak dengan kebijakan `grounded-bridge-v1` memakai koneksi linear dari cosine positif
+setelah baseline, sehingga kedekatan kecil tidak lagi terangkat oleh pangkat 0,55.
+Relasi Wordnet otomatis harus memiliki cosine minimal 0,25 ke setiap clue dan
+rata-rata minimal 0,32; label taksonomi umum seperti individu/produk tidak dipakai
+sebagai clue lintas konteks. Relasi editorial yang ditinjau tetap mendukung
+makna kiasan yang lemah di embedding.
+Kata tanpa catatan leksikal mendapat bobot kepercayaan 0,6; semuanya tetap dapat dimainkan.
+Penghubung dengan bukti untuk seluruh clue mendapat 1.000. Bentuk kata yang ditinjau
+pada seluruh konteksnya (misalnya sebar/menyebarkan) mendapat 980, tanpa stemming bebas
+atau menyamakan semua kata berimbuhan. Daftar bentuk dan kepercayaan dibekukan dalam
+snapshot; sesi serta skor lama tetap memakai edisi semula. Model kesulitan edisi baru
+belajar dari hasil edisi tersebut, sementara riwayat lama tetap dipakai untuk variasi soal.
+`audit:random` menyertakan lima kandidat tertinggi setiap babak agar mutu alternatif
+bisa diperiksa bersama keragaman petunjuk. Di edisi baru, daftar menampilkan hingga
+lima jawaban rujukan; slot tidak diisi dengan tetangga embedding tanpa bukti.
+Babak Dekat Makna di edisi baru memakai kelompok sinonim yang sesuai dengan clue
+dan jawaban acuan. Sinonim setara (lelah/letih/capek/penat) mendapat 1.000; tetangga
+embedding tanpa bukti dibatasi 949. Aturan ini berlaku untuk kompilasi Daily dan
+deskriptor Acak baru, tanpa mengubah tabel atau jawaban edisi yang sudah dimainkan.
+
 Perbandingan daily di rekap menampilkan jumlah sesi selesai, rata-rata, dan peringkat pada **tanggal dan versi soal yang sama**. Peringkat seri dibagi; persentase menghitung pemain lain dengan skor lebih rendah, tidak memasukkan diri sendiri. Sesi acak, demo, belum selesai, dan sesi yang digantikan tidak ikut dihitung. Statistik memakai identitas cookie anonim, sehingga menghapus cookie dapat membuat identitas baru. Data kosong tidak diisi dengan angka contoh.
 
 API tambahan: `GET /api/random`, `POST /api/random/runs`, dan `GET /api/runs/:id/comparison`. Semua sesi tetap memakai endpoint pemulihan dan jawaban yang sama. Migrasi database v3 mempertahankan ID sesi/jawaban, memisahkan constraint sesi daily dan acak, serta memeriksa foreign key dalam transaksi. Backup database sebelum pembaruan produksi.
@@ -192,6 +212,28 @@ mengganti bank aktif: `npm run audit:random -- --preview`. Laporan mencakup juml
 puzzle yang lolos, pola konteks, clue unik, dan pasangan berulang. Untuk memperbarui
 bank dengan embedding tersimpan, gunakan `preview-random --reuse-published`, lalu
 `publish-random --reuse-published --approve HASH` sesuai hash preview.
+
+### Stok Daily sampai akhir 2026
+
+`content/daily-year-end.ts` memuat 57 paket editorial untuk 5 November–31 Desember
+2026 (Daily #015–#071): 285 babak dengan 228 jawaban penghubung berbeda.
+Tiap paket mengikuti urutan tiga pasangan, satu tiga-petunjuk, dan satu Dekat Makna.
+Petunjuk, jawaban acuan, dan penjelasan ditulis per babak lalu diperiksa terhadap
+kosakata, relasi kurasi, jarak antarpetunjuk, serta pengulangan kombinasi.
+
+Jalankan `npm run content:schedule` untuk membuat `data/daily-year-end-review.json`.
+Setelah meninjau semua babak, terbitkan dengan
+`npm run content:schedule -- --apply --approve HASH` memakai hash preview.
+Publikasi memeriksa seluruh konflik sebelum menambah tanggal, menyimpan catatan
+kondisi awal di `backups/`, dan tidak menimpa Daily yang sudah ada. Pengulangan
+publikasi yang sama tidak menambah duplikat. Petunjuk yang dijadwalkan dikeluarkan
+dari bank Acak untuk edisi berikutnya; sesi Acak yang sedang berjalan tetap utuh.
+
+Snapshot jadwal menyimpan `scoringRef` ke edisi indeks beku di `puzzle_versions`.
+Skor dihitung dari indeks lokal ketika babak dibuka dan dicache; tidak ada panggilan
+provider saat bermain. Pergantian bank Acak tidak mengubah skor Daily tersebut.
+Database backup menyertakan indeks yang direferensikan bersama seluruh jadwal.
+Daily baru terbuka otomatis pukul 00.00 WIB dan tidak dapat dimainkan lebih awal.
 
 ### Tampilan arcade
 

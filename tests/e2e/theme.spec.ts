@@ -12,9 +12,14 @@ test('arcade theme ignores old light preferences and CRT persists across game an
   await page.getByRole('button',{name:'Pengaturan'}).click();
   const crt=page.getByRole('button',{name:'Efek CRT',exact:true});
   await expect(crt).toHaveAttribute('aria-pressed','true');
-  await expect(page.locator('.crt-screen')).toHaveCSS('filter',/crt-barrel/);
+  await expect(page.locator('.crt-screen')).toHaveCSS('filter','none');
+  await expect(page.locator('.daily-lobby')).toHaveCSS('filter','none');
+  await expect(page.getByRole('dialog')).toHaveCSS('filter','none');
+  await expect(page.locator('feDisplacementMap')).toHaveCount(0);
+  expect(await page.locator('.brand').evaluate(el=>getComputedStyle(el).textShadow)).not.toBe('none');
+  expect(await page.locator('body').evaluate(el=>getComputedStyle(el,'::after').backgroundImage)).toContain('repeating-linear-gradient');
   expect(await page.locator('body').evaluate(el=>getComputedStyle(el,'::after').pointerEvents)).toBe('none');
-  // One screen filter includes the header; inner panels are not filtered twice.
+  // Bloom and phosphor remain active without distorting content or controls.
   await expect(page.locator('main')).toHaveCSS('filter','none');
   await page.evaluate(()=>document.fonts.ready);
   expect(await page.evaluate(()=>document.fonts.check('24px "Arcade Pixel"'))).toBe(true);
@@ -23,6 +28,7 @@ test('arcade theme ignores old light preferences and CRT persists across game an
   await crt.click();
   await expect(page.locator('html')).toHaveAttribute('data-crt','off');
   await expect(page.locator('.crt-screen')).toHaveCSS('filter','none');
+  await expect(page.locator('.daily-lobby')).toHaveCSS('filter','none');
   await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content','#08090d');
   await page.reload();
   await expect(page.locator('html')).toHaveAttribute('data-theme','arcade');
@@ -71,9 +77,10 @@ test('CRT light moves smoothly over content and stops with Motion, reduced motio
   await expect(page.locator('html')).toHaveAttribute('data-crt-signal','on');
   await expect(page.locator('.crt-scan-beam')).toHaveCSS('animation-name','crt-scan');
   expect(await page.locator('.crt-scan-beam').evaluate(el=>getComputedStyle(el).pointerEvents)).toBe('none');
+  await expect(beam).toHaveCSS('backdrop-filter','none');
   const beamY=await page.locator('.crt-scan-beam').evaluate(el=>el.getBoundingClientRect().y);
   await expect.poll(()=>page.locator('.crt-scan-beam').evaluate(el=>el.getBoundingClientRect().y)).toBeGreaterThan(beamY+1);
-  await expect(page.locator('.crt-screen')).toHaveCSS('filter',/crt-phosphor/);
+  await expect(page.locator('.crt-screen')).toHaveCSS('filter','none');
   const frames=await beam.evaluate(el=>new Promise<number[]>(resolve=>{
     const positions:number[]=[];
     const sample=()=>{positions.push(el.getBoundingClientRect().y);if(positions.length<30)requestAnimationFrame(sample);else resolve(positions);};
@@ -108,7 +115,7 @@ test('CRT light moves smoothly over content and stops with Motion, reduced motio
   await page.getByRole('button',{name:'Motion on',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-crt-signal','off');
   await expect(page.locator('.crt-scan-beam')).toHaveCSS('display','none');
-  await expect(page.locator('.crt-screen')).toHaveCSS('filter',/crt-phosphor/);
+  await expect(page.locator('.crt-screen')).toHaveCSS('filter','none');
   await page.emulateMedia({reducedMotion:'reduce'});
   await page.getByRole('button',{name:'Motion off',exact:true}).click();
   await expect(page.locator('html')).toHaveAttribute('data-crt-signal','off');
@@ -140,4 +147,60 @@ test('statistics stay readable inside narrow and short viewports',async({page})=
   }
   await page.getByRole('button',{name:'Tutup',exact:true}).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
+});
+
+
+test('CRT keeps painted corner controls aligned with hover and click targets',async({page},testInfo)=>{
+  await page.setViewportSize(testInfo.project.name==='desktop'?{width:1920,height:1080}:{width:390,height:844});
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await page.goto('/');await page.evaluate(()=>document.fonts.ready);
+  await expect(page.locator('.daily-lobby')).toBeVisible();
+  // Painted probes detect visual displacement; DOM bounds alone miss this bug.
+  const probes=await page.locator('.site-header button').evaluateAll(buttons=>buttons.map(button=>{
+    const el=button as HTMLElement;el.style.position='relative';
+    const probe=document.createElement('span');probe.dataset.crtProbe='';
+    probe.style.cssText='position:absolute;left:5px;top:5px;width:8px;height:8px;background:#ff00ff;pointer-events:none;z-index:1';el.append(probe);
+    const r=probe.getBoundingClientRect();return {x:r.x+3,y:r.y+3};
+  }));
+  const screenshot=await page.screenshot({scale:'css'});
+  const {data,info}=await sharp(screenshot).removeAlpha().raw().toBuffer({resolveWithObject:true});
+  for(const p of probes){
+    const index=(Math.floor(p.y)*info.width+Math.floor(p.x))*info.channels;
+    expect(data[index]).toBeGreaterThan(100);expect(data[index+1]).toBeLessThan(70);expect(data[index+2]).toBeGreaterThan(100);
+  }
+  await page.locator('[data-crt-probe]').evaluateAll(nodes=>nodes.forEach(n=>n.remove()));
+  for(const name of ['Cara bermain','Statistik','Pengaturan']){
+    const button=page.locator('.site-header').getByRole('button',{name,exact:true});
+    const bounds=(await button.boundingBox())!;
+    for(const [x,y] of [[bounds.x+4,bounds.y+4],[bounds.x+bounds.width-4,bounds.y+bounds.height-4]]){
+      await page.mouse.move(x,y);
+      expect(await button.evaluate(el=>el.matches(':hover'))).toBe(true);
+      expect(await button.evaluate((el,p)=>el.contains(document.elementFromPoint(p.x,p.y)),{x,y})).toBe(true);
+    }
+    await page.mouse.click(bounds.x+bounds.width-4,bounds.y+4);
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await page.getByRole('button',{name:'Tutup',exact:true}).click();
+  }
+});
+
+
+test('home logo flickers while navbar stays steady and Motion preferences preserve bloom',async({page})=>{
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await page.goto('/');
+  const brand=page.locator('.brand'),lamp=page.locator('.start-logo .marquee-flicker').first();
+  await expect(brand).toHaveCSS('animation-name','none');
+  await expect(lamp).toHaveCSS('animation-name','crt-logo-flicker');
+  expect(await lamp.evaluate(el=>parseFloat(getComputedStyle(el).animationDuration))).toBeLessThan(4);
+  expect(await brand.evaluate(el=>getComputedStyle(el).textShadow)).toContain('20px');
+  await page.getByRole('button',{name:'Pengaturan',exact:true}).click();
+  await page.getByRole('button',{name:'Motion on',exact:true}).click();
+  await expect(brand).toHaveCSS('animation-name','none');await expect(lamp).toHaveCSS('animation-name','none');
+  expect(await brand.evaluate(el=>getComputedStyle(el).textShadow)).not.toBe('none');
+  await page.getByRole('button',{name:'Motion off',exact:true}).click();
+  await page.emulateMedia({reducedMotion:'reduce'});
+  await expect(brand).toHaveCSS('animation-name','none');await expect(lamp).toHaveCSS('animation-name','none');
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  await expect(brand).toHaveCSS('animation-name','none');
+  await page.getByRole('button',{name:'Efek CRT',exact:true}).click();
+  await expect(brand).toHaveCSS('animation-name','none');await expect(brand).toHaveCSS('text-shadow','none');
 });

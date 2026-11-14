@@ -1,6 +1,8 @@
 import type { SVGProps } from 'react';
 type Props=SVGProps<SVGSVGElement>;
 const shapes={
+ heart:['01100110','11111111','11111111','11111111','01111110','00111100','00011000','00000000'],
+ heartOutline:['01100110','10011001','10000001','10000001','01000010','00100100','00011000','00000000'],
  arrow:['00010000','00011000','00011100','11111110','00011100','00011000','00010000','00000000'],
  back:['00001000','00011000','00111000','01111111','00111000','00011000','00001000','00000000'],
  play:['01000000','01100000','01110000','01111000','01110000','01100000','01000000','00000000'],
@@ -21,3 +23,5 @@ const shapes={
 };
 function icon(name:keyof typeof shapes){return function Icon({width=20,height=20,...props}:Props){return <svg width={width} height={height} viewBox="0 0 8 8" fill="currentColor" shapeRendering="crispEdges" aria-hidden="true" {...props}>{shapes[name].flatMap((row,y)=>Array.from(row,(cell,x)=>cell==='1'?<rect key={`${x}-${y}`} x={x} y={y} width="1" height="1"/>:null))}</svg>;};}
 export const ArrowRightIcon=icon('arrow'),ChevronLeftIcon=icon('back'),PlayIcon=icon('play'),Cross2Icon=icon('close'),CheckIcon=icon('check'),BarChartIcon=icon('stats'),QuestionMarkCircledIcon=icon('help'),CalendarIcon=icon('calendar'),SpeakerLoudIcon=icon('sound'),SpeakerOffIcon=icon('mute'),Share2Icon=icon('share'),DownloadIcon=icon('download'),ReloadIcon=icon('reload'),PersonIcon=icon('person'),ClockIcon=icon('clock'),ShuffleIcon=icon('shuffle'),OpenInNewWindowIcon=icon('share'),SettingsIcon=icon('settings');
+
+export const HeartIcon=icon('heart'),HeartOutlineIcon=icon('heartOutline');

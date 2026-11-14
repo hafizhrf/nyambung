@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   modeLabels,
+  WORD_ALREADY_USED,
   type RoomSettings,
   type RoomSummary,
   type RoomView,
@@ -11,6 +12,8 @@ import {
   type ChainEntry,
   type Stroke,
 } from "@nyambung/shared";
+import { enterMabar } from "./pageTransitions";
+import { HeartIcon, HeartOutlineIcon } from "./PixelIcons";
 import { ArcadeSelect } from "./ArcadeSelect";
 import { api, apiBase, uploadAvatar } from "./api";
 import { platform } from "./platform";
@@ -55,12 +58,12 @@ const modeGuides: Record<
     ],
   },
   word: {
-    summary: "Sambung kata sistem gugur. Bertahan sampai jadi yang terakhir.",
+    summary: "Sambung kata dengan 2 nyawa. Bertahan sampai jadi yang terakhir.",
     rules: [
       "Pemain bergiliran sesuai urutan acak, dimulai dari kata RUMAH.",
-      "Kata harus diawali huruf terakhir kata sebelumnya dan ada di kamus.",
-      "Kata yang sudah dipakai di permainan ini tidak boleh dipakai lagi.",
-      "Kehabisan waktu saat giliranmu berarti gugur.",
+      "Server memilih satu awalan dari 1–4 huruf terakhir kata sebelumnya setiap giliran. Ikuti awalan wajib yang ditampilkan; server menghindari akhiran yang terlalu sulit.",
+      "Kata yang sudah dipakai ditolak tanpa mengurangi nyawa. Waktu tetap berjalan; coba kata lain.",
+      "Kata salah, tidak dikenal, atau waktu habis mengurangi satu nyawa dan mengakhiri giliranmu. Habis 2 nyawa berarti gugur.",
       "Waktu giliran berkurang 1 detik tiap putaran, minimal 5 detik. Pemain terakhir menang.",
     ],
   },
@@ -95,7 +98,7 @@ function describe(s: RoomView["settings"]) {
   return s.mode === "chain"
     ? `Tempo ${paceLabels[s.pace]}`
     : s.mode === "word"
-      ? `Sistem gugur · ${s.seconds} dtk`
+      ? `2 nyawa · ${s.seconds} dtk`
       : `${s.rounds} babak · ${s.seconds} dtk`;
 }
 /** Short facts for the lobby tiles. */
@@ -114,7 +117,7 @@ function facts(s: RoomView["settings"]): [string, string][] {
     return [
       ["Waktu awal", `${s.seconds} dtk`],
       ["Waktu minimal", `${Math.min(5, s.seconds)} dtk`],
-      ["Sistem", "Gugur"],
+      ["Nyawa", "2"],
     ];
   return [
     ["Babak", String(s.rounds)],
@@ -137,6 +140,14 @@ function localWrite(key: string, value: string | null) {
   } catch {
     /* Storage is optional. */
   }
+}
+function LifeHearts({ remaining, label, compact = false }: { remaining: number; label: string; compact?: boolean }) {
+  const count = Math.max(0, Math.min(2, remaining));
+  return <span className={`life-hearts${compact ? ' compact' : ''}`} role="img" aria-label={`${label}: ${count} dari 2 nyawa`}>
+    {[0, 1].map(index => <span key={index} className="life-heart-slot" data-filled={index < count ? 'true' : 'false'} aria-hidden="true">
+      {index < count ? <HeartIcon/> : <HeartOutlineIcon/>}
+    </span>)}
+  </span>;
 }
 function Avatar({ p }: { p: GuestProfile }) {
   return p.avatar ? (
@@ -347,10 +358,12 @@ export function MabarMini({ room }: { room: RoomView | null }) {
 export function Mabar({
   active,
   compact,
+  motion,
   onRoom,
 }: {
   active: boolean;
   compact: boolean;
+  motion: boolean;
   onRoom: (r: RoomView | null) => void;
 }) {
   const invite = new URLSearchParams(location.search).get("room");
@@ -377,6 +390,10 @@ export function Mabar({
     [muted, setMuted] = useState<string[]>([]),
     [draft, setDraft] = useState<ChainEntry | undefined>(),
     [now, setNow] = useState(Date.now());
+  const scene = useRef<HTMLElement>(null);
+  const answerField=useRef<HTMLInputElement>(null);
+  const answerShake=useRef<Animation|null>(null);
+  useEffect(()=>{if(!motion)answerShake.current?.cancel();return()=>answerShake.current?.cancel();},[motion]);
   const socket = useRef<WebSocket | null>(null),
     disconnect = useRef<(() => void) | null>(null),
     roomRef = useRef(room),
@@ -583,6 +600,7 @@ export function Mabar({
   const m = room?.match,
     self = room?.members.find((p) => p.id === room.self),
     lobby = !m || m.phase === "results";
+  const requiredPrefix=m?.requiredPrefix??m?.prompt.slice(-1)??"";
   useEffect(() => {
     if (active) document.querySelector("main")?.scrollTo({ top: 0 });
   }, [m?.phase, m?.stage, active]);
@@ -681,10 +699,18 @@ export function Mabar({
             ? "Semua siap. Mulai permainan!"
             : "Semua siap. Menunggu host memulai."
           : `Menunggu pemain siap · ${readyCount}/${players.length}`;
+  useLayoutEffect(() => {
+    const root = scene.current;
+    if (!root) return;
+    root.dataset.sceneState = 'idle';
+    if (!active || compact || !motion || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const ctx = enterMabar(root);
+    return () => { ctx.revert(); root.dataset.sceneState = 'idle'; };
+  }, [active, compact, motion, tab, editingProfile, editing, room?.id, room?.mode, m?.phase, m?.stage, profile === undefined, Boolean(profile)]);
   const memberName = (id?: string) =>
     room?.members.find((p) => p.id === id)?.name ?? "Pemain";
   return (
-    <section className="mabar-page" hidden={!active} aria-label="Mabar">
+    <section ref={scene} className="mabar-page" hidden={!active} aria-label="Mabar">
       {room ? (
         <header className="mabar-heading">
           <div className="mabar-title">
@@ -775,7 +801,7 @@ export function Mabar({
         </header>
       )}
       {error && (
-        <p role="alert" className="error-message mabar-error">
+        <p id="mabar-error" role="alert" className="error-message mabar-error">
           {error}
         </p>
       )}
@@ -1197,35 +1223,22 @@ export function Mabar({
                     </div>
                   )}
                   <div className="lobby-state">
-                    {!m && (
-                      <section
-                        className="mode-guide"
-                        aria-label={`Cara main ${modeLabels[room.mode]}`}
-                      >
-                        <h3>Cara main</h3>
-                        <p className="lobby-mode">
-                          {modeGuides[room.mode].summary}
-                        </p>
-                        <ol className="guide-rules">
-                          {modeGuides[room.mode].rules.map((rule, n) => (
-                            <li key={n}>
-                              <span aria-hidden="true">
-                                {String(n + 1).padStart(2, "0")}
-                              </span>
-                              {rule}
-                            </li>
-                          ))}
-                        </ol>
+                    {!m && <>
+                      <div className="mode-overview">
+                        <p className="lobby-mode">{modeGuides[room.mode].summary}</p>
                         <dl className="guide-facts">
-                          {facts(room.settings).map(([label, value]) => (
-                            <div key={label}>
-                              <dt>{label}</dt>
-                              <dd>{value}</dd>
-                            </div>
-                          ))}
+                          {facts(room.settings).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
                         </dl>
-                      </section>
-                    )}
+                      </div>
+                      <details className="mode-guide" key={room.mode} aria-label={`Cara main ${modeLabels[room.mode]}`}>
+                        <summary><span>Cara main</span><span className="guide-toggle" aria-hidden="true"/></summary>
+                        <div className="mode-guide-body">
+                          <ol className="guide-rules">
+                            {modeGuides[room.mode].rules.map((rule, n) => <li key={n}><span aria-hidden="true">{String(n + 1).padStart(2, "0")}</span>{rule}</li>)}
+                          </ol>
+                        </div>
+                      </details>
+                    </>}
                     <div className="ready-row">
                       <div className="ready-meter" aria-hidden="true">
                         {players.map((p) => (
@@ -1302,8 +1315,8 @@ export function Mabar({
                       <span className="arena-label">Kata terakhir</span>
                       <strong className="chain-word">{m.prompt}</strong>
                       <p className="word-next">
-                        Berikutnya diawali huruf{" "}
-                        <b>{m.prompt.slice(-1).toUpperCase()}</b>
+                        Awalan wajib · {requiredPrefix.length} huruf{" "}
+                        <span className="word-suffixes"><b>{requiredPrefix.toUpperCase()}</b></span>
                       </p>
                       <p
                         className="turn-banner"
@@ -1313,6 +1326,7 @@ export function Mabar({
                           ? "Giliranmu!"
                           : `Giliran ${memberName(m.turn)}`}
                       </p>
+                      {!self?.spectator && <div className="word-lives"><span>Nyawamu</span><LifeHearts remaining={m.lives?.[room.self] ?? (m.eliminated?.includes(room.self) ? 0 : 2)} label="Nyawa kamu"/></div>}
                     </div>
                   )}
                   {m.mode === "chain" && (
@@ -1387,7 +1401,7 @@ export function Mabar({
                   ) : m.mode === "word" && m.turn !== room.self ? (
                     <p className="arena-note">
                       Tunggu giliranmu. Siapkan kata berawalan{" "}
-                      {m.prompt.slice(-1).toUpperCase()}.
+                      {requiredPrefix.toUpperCase()}.
                     </p>
                   ) : m.submitted ? (
                     <p className="arena-note">
@@ -1399,22 +1413,36 @@ export function Mabar({
                       onSubmit={(e) => {
                         e.preventDefault();
                         void run(async () => {
-                          await send("answer", input);
+                          try { await send("answer", input); }
+                          catch(error) {
+                            if(m.mode==='word'&&(error as Error).message===WORD_ALREADY_USED) {
+                              answerField.current?.focus();
+                              answerShake.current?.cancel();
+                              if(motion&&!matchMedia('(prefers-reduced-motion: reduce)').matches)answerShake.current=answerField.current?.animate(
+                                [{transform:'translateX(0)'},{transform:'translateX(-6px)'},{transform:'translateX(6px)'},{transform:'translateX(-4px)'},{transform:'translateX(4px)'},{transform:'translateX(0)'}],
+                                {duration:320,easing:'steps(2,end)'},
+                              )??null;
+                            }
+                            throw error;
+                          }
                           setInput("");
                         });
                       }}
                     >
                       <label>
                         {m.mode === "word"
-                          ? `Kata berawalan ${m.prompt.slice(-1).toUpperCase()}`
+                          ? `Kata berawalan ${requiredPrefix.toUpperCase()}`
                           : "Jawaban"}
                         <input
+                          ref={answerField}
+                          aria-invalid={m.mode==='word'&&error===WORD_ALREADY_USED||undefined}
+                          aria-describedby={error?'mabar-error':undefined}
                           aria-label="Jawaban mabar"
                           autoComplete="off"
                           autoFocus
                           maxLength={80}
                           value={input}
-                          onChange={(e) => setInput(e.target.value)}
+                          onChange={(e) => {setInput(e.target.value);if(error===WORD_ALREADY_USED)setError("");}}
                         />
                       </label>
                       <button
@@ -1436,13 +1464,17 @@ export function Mabar({
               {m?.phase === "reveal" &&
                 (m.mode === "word" ? (
                   <div className="arena-center">
-                    <span className="arena-label">Waktu habis</span>
-                    <strong className="reveal-answer eliminated">
-                      {memberName(m.reveal?.eliminated)} gugur
+                    <span className="arena-label">{m.reveal?.lostLife?.reason ?? 'Waktu habis.'}</span>
+                    <strong className={`reveal-answer${m.reveal?.eliminated ? ' eliminated' : ' life-lost'}`}>
+                      {memberName(m.reveal?.lostLife?.playerId ?? m.reveal?.eliminated)}{m.reveal?.eliminated ? ' gugur' : ' kehilangan 1 nyawa'}
                     </strong>
-                    <p className="mabar-hint">
-                      {alive} pemain masih bertahan
-                    </p>
+                    <div className="word-failure-details">
+                      <p><span>Jawaban dikirim</span><strong className="failed-attempt">{m.reveal?.lostLife?.attempt ?? (m.reveal?.lostLife?.reason==='Waktu habis.'?'Tidak mengirim jawaban':'Jawaban tidak terekam')}</strong></p>
+                      <p><span>Awalan wajib</span><strong>{(m.reveal?.lostLife?.prefix??requiredPrefix).toUpperCase()}</strong></p>
+                      {!!m.reveal?.lostLife?.examples?.length && <div className="word-failure-examples"><span>Contoh yang bisa</span><div>{m.reveal.lostLife.examples.map(word=><b key={word}>{word}</b>)}</div></div>}
+                    </div>
+                    <LifeHearts remaining={m.reveal?.lostLife?.remaining ?? 0} label={`Sisa nyawa ${memberName(m.reveal?.lostLife?.playerId)}`}/>
+                    <p className="mabar-hint">{m.reveal?.eliminated ? `${alive} pemain masih bertahan` : 'Masih bisa lanjut. Giliran berikutnya segera dimulai.'}</p>
                   </div>
                 ) : (
                   <>
@@ -1596,7 +1628,7 @@ export function Mabar({
                           </b>
                         </small>
                       </span>
-                      <b className="player-score">{p.score}</b>
+                      <div className="player-metrics">{m?.mode==='quick'&&['playing','reveal'].includes(m.phase)&&!p.spectator&&m.answered?.includes(p.id)&&<span className="player-answered"><span aria-hidden="true">✓</span> Sudah nebak</span>}{room.mode === 'word' && !p.spectator && <LifeHearts compact remaining={m?.lives?.[p.id] ?? (m?.eliminated?.includes(p.id) ? 0 : 2)} label={`Nyawa ${p.name}`}/>}<b className="player-score">{p.score}</b></div>
                       {p.id !== room.self && (
                         <details className="player-menu">
                           <summary aria-label={`Aksi untuk ${p.name}`}>

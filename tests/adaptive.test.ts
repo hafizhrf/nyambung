@@ -74,6 +74,12 @@ it('trains future selections from persisted gameplay, counts retries once, and f
   expect(descriptor(other.id).policy.samples).toBe(4);
   expect(JSON.stringify(other)).not.toContain('weights');
   expect(JSON.stringify(other)).not.toContain('target');
+  const revised=JSON.parse(JSON.stringify(snapshot));
+  revised.generator.scoringPolicy={version:'grounded-bridge-v1',lexicalWords:revised.generator.words};
+  publishRandomPool(store,revised,true);
+  const fresh=service.startRandom(service.createPlayer());
+  expect(descriptor(fresh.id).policy.samples).toBe(0);
+  expect(service.startRandom(player)).toEqual(next);
  } finally {store.sqlite.close();}
 });
 

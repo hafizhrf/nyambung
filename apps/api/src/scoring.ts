@@ -1,3 +1,4 @@
+import {reviewedClosestAlternatives} from '../../../content/closest.js';
 import { z } from 'zod';
 import { createHash } from 'node:crypto';
 import type { StageKind } from '@nyambung/shared';
@@ -10,8 +11,8 @@ export const contentStageSchema = z.object({ kind: z.enum(['bridge2', 'bridge3',
 });
 export type ContentStage = z.infer<typeof contentStageSchema>;
 export interface ScoreEntry { score: number; connections: number[]; similarities?: number[]; rank?: number; vocabularySize?: number }
-export interface PublishedStage extends ContentStage { concept?:string; scores: Record<string, ScoreEntry>; vocabularySize?: number }
-export interface Snapshot { generator?: import('./random-generator.js').RandomGenerator; version: 1; model: string; formula: string; vocabularyHash: string; aliases: Record<string, string>; blocked: string[]; stages: PublishedStage[] }
+export interface PublishedStage extends ContentStage { concept?:string; referenceAnswers?:string[]; scores: Record<string, ScoreEntry>; vocabularySize?: number }
+export interface Snapshot { scoringRef?:string; generator?: import('./random-generator.js').RandomGenerator; version: 1; model: string; formula: string; vocabularyHash: string; aliases: Record<string, string>; blocked: string[]; stages: PublishedStage[] }
 export const FORMULA = 'centered-cosine-p10-p999-anchor-pow055/harmonic-weak3-v5';
 export function cosine(a: number[], b: number[]) {
   if (!a.length || a.length !== b.length) throw new Error('Embedding tidak kompatibel.');
@@ -43,7 +44,35 @@ export function centerVectors(vectors: Map<string, number[]>, words: string[]) {
   }
   return new Map(words.map(word => [word, vectors.get(word)!.map((value, i) => value - mean[i])]));
 }
+// Publication-time review only. Frozen random descriptors and historical score
+// tables are never expanded from a newer meaning list during gameplay.
+export function reviewClosestStage<T extends ContentStage>(stage:T, vocabulary:ReadonlySet<string>):T & {referenceAnswers?:string[]} {
+  if(stage.kind!=='closest') return stage;
+  const alternatives=reviewedClosestAlternatives(stage.clues[0],stage.best).filter(word=>vocabulary.has(word)&&!stage.excluded?.includes(word));
+  const overrides={...stage.overrides,...Object.fromEntries(alternatives.map(word=>[word,[1]]))};
+  const referenceAnswers=[...new Set([stage.best,...Object.keys(overrides).filter(word=>overrides[word][0]>0)])].filter(word=>word!==stage.clues[0]&&!stage.excluded?.includes(word)&&vocabulary.has(word));
+  return {...stage,overrides,referenceAnswers};
+}
+function rankScores(scores:Record<string,ScoreEntry>) {
+  const histogram=new Uint32Array(1001),ranks=new Uint32Array(1001);
+  for(const entry of Object.values(scores)) histogram[entry.score]++;
+  let above=0;for(let score=1000;score>=0;score--){ranks[score]=above+1;above+=histogram[score];}
+  for(const entry of Object.values(scores)) entry.rank=ranks[entry.score];
+}
+// Produce a corrected copy for a new edition using existing frozen scores.
+export function reviseClosestStage(previous:PublishedStage):PublishedStage {
+  if(previous.kind!=='closest') return previous;
+  const reviewed=reviewClosestStage(previous,new Set([...previous.clues,...Object.keys(previous.scores)]));
+  const scores:Record<string,ScoreEntry>={};
+  for(const [word,old] of Object.entries(previous.scores)) {
+    const connection=reviewed.excluded?.includes(word)?0:word===reviewed.best?1:reviewed.overrides[word]?.[0];
+    scores[word]=connection===undefined?{...old,score:Math.min(949,old.score)}:{...old,score:Math.round(1000*connection),connections:[connection]};
+  }
+  rankScores(scores);
+  return {...reviewed,scores};
+}
 export function compileStage(stage: ContentStage, vocabulary: string[], vectors?: Map<string, number[]>): PublishedStage {
+  stage=reviewClosestStage(stage,new Set(vocabulary));
   contentStageSchema.parse(stage);
   if (!vocabulary.includes(stage.best) || stage.clues.some(clue => !vocabulary.includes(clue)) || Object.keys(stage.overrides).some(word => !vocabulary.includes(word))) throw new Error('Kata stage belum masuk kosakata.');
   const scores: Record<string, ScoreEntry> = {};
@@ -62,11 +91,12 @@ export function compileStage(stage: ContentStage, vocabulary: string[], vectors?
     const raw = similarities.map(samples => samples[index]);
     let connections = raw.map((similarity, i) => vectors ? Math.pow(Math.max(0, Math.min(1, (similarity - baselines[i]) / denominators[i])), .55) : 0);
     const correction = Object.hasOwn(stage.overrides, word) ? stage.overrides[word] : undefined;
-    if (correction) connections = connections.map((value, i) => Math.max(value, correction[i]));
+    if (correction) connections = stage.kind==='closest'?[...correction]:connections.map((value, i) => Math.max(value, correction[i]));
     if (word === stage.best) connections = stage.clues.map(() => 1);
     // Valid antonyms/unsuitable senses earn zero instead of being rejected as unknown.
     if (stage.excluded?.includes(word)) connections = stage.clues.map(() => 0);
-    scores[word] = { score: combine(connections), connections: connections.map(v => Math.round(v * 1000) / 1000), ...(vectors ? { similarities: raw.map(v => Math.round(v * 1000) / 1000) } : {}) };
+    const score=combine(connections);
+    scores[word] = { score:stage.kind==='closest'&&word!==stage.best&&!correction?Math.min(949,score):score, connections: connections.map(v => Math.round(v * 1000) / 1000), ...(vectors ? { similarities: raw.map(v => Math.round(v * 1000) / 1000) } : {}) };
   }
   const sorted = Object.values(scores).sort((a, b) => b.score - a.score);
   let rank = 1;
@@ -80,6 +110,7 @@ export function compileStage(stage: ContentStage, vocabulary: string[], vectors?
 // Random synonym editions use a vocabulary percentile as the upper anchor.
 // Anchoring to a weak best-vector could otherwise give thousands of words 1000.
 export function compileRandomSynonym(stage:ContentStage, words:string[], vectors:Map<string,number[]>):PublishedStage {
+  stage=reviewClosestStage(stage,new Set(words));
   const published=compileStage(stage,words,vectors);
   const entries=Object.entries(published.scores);
   const distribution=entries.map(([,entry])=>entry.similarities![0]).sort((a,b)=>a-b);

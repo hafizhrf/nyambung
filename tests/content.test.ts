@@ -53,11 +53,11 @@ it('keeps unreviewed synonym neighbours below curated answers even when a best v
   ]);
   const stage=compileRandomSynonym({kind:'closest',clues:['akrab'],best:'dekat',explanation:'Akrab berarti dekat dalam hubungan.',overrides:{karib:[.98]},excluded:['asing']},words,vectors);
   expect(stage.scores.dekat.score).toBe(1000);
-  expect(stage.scores.karib.score).toBe(980);
+  expect(stage.scores.karib.score).toBe(1000);
   expect(stage.scores.abaka.score).toBeLessThan(950);
   expect(stage.scores.asing.score).toBe(0);
   expect(stage.scores.dekat.rank).toBe(1);
-  expect(stage.scores.karib.rank).toBe(2);
+  expect(stage.scores.karib.rank).toBe(1);
 });
 
 import lexicalRelations from '../content/wordnet-relations.json';

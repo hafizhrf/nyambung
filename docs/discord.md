@@ -126,8 +126,9 @@ petunjuk pemain lain tidak dikirim. Daftar ini hanya ada di Discord Activity.
 
 ### Status channel, leaderboard, dan recap
 
-- Saat pemain membuka Activity, bot membuat satu kartu progres aktif per channel,
-  kemudian mengedit pesan yang sama saat progres atau tanggal Daily berubah
+- Saat pemain membuka Activity, bot membuat kartu progres baru per channel untuk setiap tanggal Daily,
+  Kartu ini tetap menampilkan Daily meskipun lobby Mabar masih ada. Bot
+  kemudian mengedit pesan tanggal tersebut saat progres berubah
   (sekitar 30 detik). PNG memuat nama, avatar, mode dan lima kotak progres babak.
   Tombol Play membuka Activity lewat handler aplikasi, tanpa undangan otomatis baru. Pemain yang
   tidak lagi mengirim heartbeat hilang dari daftar aktif setelah sekitar 90 detik.

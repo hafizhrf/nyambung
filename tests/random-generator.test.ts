@@ -149,3 +149,94 @@ it('uses old-edition final clues in the rotation while preserving the unfinished
     expect(seen.size).toBe(next.stages.length);
   } finally {store.sqlite.close();}
 });
+
+import {qualifyBridgeScoring} from '../scripts/bridge-scoring.js';
+function noisyBridgeFixture():RandomGenerator {
+  const words=['informasi','benih','sebar','sebarkan','menyebar','menyebarkan','disebar','disebarkan','tersebar','biji','bekalan','bungkalan','beritanya','beritakan','asing','bunga','berbunga'];
+  return {version:3,words,answers:['sebar'],relations:[{answer:'sebar',facets:[['informasi'],['benih']]}],profiles:[
+    {word:'informasi',baseline:-.05,reference:.4,similarities:words.map(word=>word==='informasi'?1:word==='biji'?.027:['bekalan','bungkalan'].includes(word)?.25:word.startsWith('berita')?.5:.07)},
+    {word:'benih',baseline:-.05,reference:.4,similarities:words.map(word=>word==='benih'||word==='biji'?1:['bekalan','bungkalan'].includes(word)?.24:.095)},
+  ],excludedCombos:[]};
+}
+it('ranks reviewed verb forms above noisy embedding neighbours and penalizes one-sided answers only in new editions',()=>{
+  const old=noisyBridgeFixture(),round={kind:'bridge2' as const,clues:['informasi','benih'],target:'sebar'};
+  const before=evaluateRound(old,round)!;
+  const next=JSON.parse(JSON.stringify(old)) as RandomGenerator;
+  qualifyBridgeScoring(next);
+  const after=evaluateRound(next,round)!;
+  expect(after.best).toBe('sebar');
+  expect(after.scores.sebar.score).toBe(1000);
+  for(const word of ['sebarkan','menyebar','menyebarkan','disebar','disebarkan','tersebar']) {
+    expect(after.scores[word].score).toBe(980);
+    expect(reviewedAnswers(next,round.clues)).toContain(word);
+  }
+  for(const word of ['bekalan','bungkalan','beritanya','beritakan']) {
+    expect(before.scores[word].score).toBeGreaterThan(600);
+    expect(after.scores[word].score).toBeLessThan(400);
+    // Lower confidence never makes a known dictionary entry unplayable.
+    expect(after.scores[word].score).toBeGreaterThan(0);
+  }
+  expect(after.scores.biji.connections[0]).toBeLessThan(.1);
+  expect(after.scores.biji.connections[1]).toBe(1);
+  expect(after.scores.biji.score).toBeLessThan(200);
+  expect(after.scores.berbunga.score).toBeLessThan(980);
+  expect(evaluateRound(old,round)).toEqual(before);
+  expect(evaluateRound(JSON.parse(JSON.stringify(next)),round)).toEqual(after);
+  expect(Object.values(after.scores).every(entry=>entry.score>=0&&entry.score<=1000)).toBe(true);
+  expect(after.scores.sebar.rank).toBe(1);
+  expect(after.scores.menyebar.rank).toBe(2);
+});
+it('qualifies forms only within editorial evidence and never promotes them for unrelated clues or senses',()=>{
+  const data=noisyBridgeFixture();
+  data.relations!.push({answer:'bunga',facets:[['taman'],['bank']],source:'wordnet-bahasa',sense:'other'});
+  const original=JSON.stringify(data.relations);
+  qualifyBridgeScoring(data);
+  expect(data.relations![0].variants).toContain('menyebar');
+  expect(data.relations![1].variants).toBeUndefined();
+  expect(reviewedAnswers(data,['informasi','asing'])).toEqual([]);
+  expect(reviewedAnswers(data,['informasi','menyebar'])).toEqual([]);
+  expect(JSON.parse(original)[0].variants).toBeUndefined();
+});
+it('pins old scores and old top answers while a new scoring edition is published',()=>{
+  const store=openDatabase(':memory:');
+  try {
+    const snapshot=compileRandomPool(store,true);snapshot.generator=noisyBridgeFixture();
+    snapshot.stages=snapshot.stages.filter(stage=>stage.kind==='closest');
+    publishRandomPool(store,snapshot,true);
+    let service=game(store);const player=service.createPlayer();
+    const edition=(store.sqlite.prepare("SELECT version_id FROM random_pool WHERE id='active'").get() as {version_id:string}).version_id;
+    const round={kind:'bridge2',clues:['informasi','benih'],target:'sebar'};
+    store.sqlite.prepare("INSERT INTO runs(id,player_id,date,mode,version_id,stage_order) VALUES (?,?,?,'random',?,?)").run('old-bridge',player,'2026-10-27',edition,JSON.stringify({generator:1,rounds:[round,round,round,round]}));
+    const answered=service.submit('old-bridge',player,{stage:0,word:'biji'});
+    const oldTop=service.topAnswers('old-bridge',player,0);
+    const saved=store.sqlite.prepare('SELECT result FROM answers WHERE run_id=?').get('old-bridge');
+    const next=JSON.parse(JSON.stringify(snapshot));qualifyBridgeScoring(next.generator);publishRandomPool(store,next,true);
+    service=game(store);
+    expect(service.view('old-bridge',player)).toEqual(answered);
+    expect(service.topAnswers('old-bridge',player,0)).toEqual(oldTop);
+    expect(service.submit('old-bridge',player,{stage:0,word:'menyebarkan'})).toEqual(answered);
+    expect(store.sqlite.prepare('SELECT result FROM answers WHERE run_id=?').get('old-bridge')).toEqual(saved);
+    const newEdition=(store.sqlite.prepare("SELECT version_id FROM random_pool WHERE id='active'").get() as {version_id:string}).version_id;
+    expect(newEdition).not.toBe(edition);
+    const another=service.createPlayer();
+    store.sqlite.prepare("INSERT INTO runs(id,player_id,date,mode,version_id,stage_order) VALUES (?,?,?,'random',?,?)").run('new-bridge',another,'2026-10-27',newEdition,JSON.stringify({generator:1,rounds:[round,round,round,round]}));
+    expect(service.submit('new-bridge',another,{stage:0,word:'menyebarkan'}).results[0].score).toBe(980);
+    expect(service.topAnswers('new-bridge',another,0).referenceOnly).toBe(true);
+    expect(service.topAnswers('new-bridge',another,0).answers.every(entry=>!['bekalan','bungkalan','beritanya','beritakan'].includes(entry.word))).toBe(true);
+  } finally {store.sqlite.close();}
+});
+it('requires independent strong evidence for automatic Wordnet bridges while preserving editorial polysemy',()=>{
+  const round={kind:'bridge2' as const,clues:['informasi','benih'],target:'sebar'};
+  const editorial=noisyBridgeFixture();qualifyBridgeScoring(editorial);
+  expect(evaluateRound(editorial,round)?.best).toBe('sebar');
+  const automatic=noisyBridgeFixture();automatic.relations![0].source='wordnet-bahasa';
+  // The old edition keeps its original interpretation.
+  expect(evaluateRound(automatic,round)?.best).toBe('sebar');
+  qualifyBridgeScoring(automatic);
+  expect(evaluateRound(automatic,round)).toBeNull();
+  const index=automatic.words.indexOf('sebar');
+  for(const profile of automatic.profiles)profile.similarities[index]=.4;
+  expect(evaluateRound(automatic,round)?.best).toBe('sebar');
+  automatic.profiles[0].similarities[index]=.2;
+  expect(evaluateRound(automatic,round)).toBeNull();
+});

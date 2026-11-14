@@ -1,5 +1,10 @@
 import { z } from "zod";
 export const mabarModes = ["chain", "quick", "word"] as const;
+export const WORD_ALREADY_USED = "Kata itu sudah dipakai di permainan ini.";
+/** Candidate endings; the server chooses one feasible prefix per turn. */
+export function wordChainSuffixes(word:string):string[] {
+  return Array.from({length:Math.min(4,word.length)},(_,index)=>word.slice(-(index+1))).reverse();
+}
 export type MabarMode = (typeof mabarModes)[number];
 export const modeLabels: Record<MabarMode, string> = {
   chain: "Rantai Gambar",
@@ -64,11 +69,16 @@ export interface MatchView {
   kind?: "bridge2" | "bridge3" | "closest";
   clues?: string[];
   turn?: string;
+  /** Server-selected suffix; stable until the turn ends. */
+  requiredPrefix?: string;
   /** Sambung Kata: elimination order, current round, turn length and recent words. */
   eliminated?: string[];
   round?: number;
   turnSeconds?: number;
   used?: string[];
+  lives?: Record<string, number>;
+  /** Public participation only; answer text and partial scores stay private. */
+  answered?: string[];
   submitted: boolean;
   task?: "text" | "drawing";
   previous?: ChainEntry;
@@ -79,6 +89,7 @@ export interface MatchView {
     answer: string;
     explanation?: string;
     eliminated?: string;
+    lostLife?: { playerId: string; reason: string; remaining: number; attempt?:string; prefix?:string; examples?:string[] };
     answers: {
       playerId: string;
       word: string;

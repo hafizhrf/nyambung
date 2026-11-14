@@ -11,7 +11,9 @@ export function FitWord({children}:{children:string}) {
       element.style.fontSize='';
       const base=parseFloat(getComputedStyle(element).fontSize);
       const width=element.clientWidth,natural=element.scrollWidth;
-      if(width>0&&natural>width)element.style.fontSize=`${Math.floor(base*width/natural*4)/4}px`;
+      // Pixel glyph advances snap to whole pixels; fractional sizes can round up
+      // after the proportional fit and leave a few pixels of overflow.
+      if(width>0&&natural>width)element.style.fontSize=`${Math.floor(base*width/natural)}px`;
     };
     const observer=new ResizeObserver(fit);observer.observe(element);fit();
     void document.fonts.ready.then(fit);

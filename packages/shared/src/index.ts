@@ -4,6 +4,8 @@ export const startDailyInput = z.object({ date: z.string().optional() });
 export type StageKind = 'bridge2' | 'bridge3' | 'closest';
 export interface StagePrompt { index: number; kind: StageKind; clues: string[] }
 export interface StageResult extends StagePrompt { word: string | null; score: number; connections: number[]; similarities?: number[]; rank?: number; vocabularySize?: number; best: string; explanation: string; skipped: boolean }
+export interface TopAnswer { word: string; score: number }
+export interface StageTopAnswers { stage: number; answers: TopAnswer[]; referenceOnly?:boolean }
 export type GameMode = 'daily' | 'random';
 export interface DailyComparison { histogram: number[]; ownScore: number | null; players: number; average: number; best: number; rank: number | null; abovePercent: number | null; }
 export interface RandomView { available: boolean; run: RunView | null }

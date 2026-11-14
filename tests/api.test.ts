@@ -277,3 +277,48 @@ describe('random mode and daily comparison', () => {
     expect((await request(`/runs/${run.id}/comparison`)).json).toEqual({ players:1, average:0, best:0, rank:1, abovePercent:null, histogram:[1,0,0,0,0,0,0,0,0,0], ownScore:0 });
   });
 });
+
+
+describe('top five completed-round answers', () => {
+  it('keeps answers private until submitted and reads the pinned edition without changing saved results', async () => {
+    const row=store.orm.select().from(daily).where(eq(daily.date,'2026-10-22')).get()!;
+    const snapshot=JSON.parse(row.snapshot) as Snapshot;
+    snapshot.blocked.push('bocor');
+    snapshot.stages[0].scores.bocor={score:1000,connections:[1,1]};
+    snapshot.stages[0].scores.makanan={score:1000,connections:[1,1]};
+    store.orm.update(daily).set({snapshot:JSON.stringify(snapshot)}).where(eq(daily.date,row.date)).run();
+    const run=(await request('/runs',{})).json;
+    const path=`/runs/${run.id}/stages/0/top-answers`;
+    expect((await request(path)).status).toBe(409);
+    expect((await request(`/runs/${run.id}/stages/5/top-answers`)).status).toBe(400);
+    expect((await request(`/runs/${run.id}/stages/01/top-answers`)).status).toBe(400);
+    await request(`/runs/${run.id}/answers`,{stage:0,word:'restoran'});
+    const saved=store.sqlite.prepare('SELECT result FROM answers WHERE run_id=? AND stage=0').get(run.id);
+    const top=await request(path);
+    expect(top.status).toBe(200);expect(top.json.stage).toBe(0);
+    expect(Object.keys(top.json).sort()).toEqual(['answers','stage']);
+    expect(top.json.answers).toHaveLength(5);
+    expect(top.json.answers[0]).toEqual({word:'restoran',score:1000});
+    expect(top.json.answers.map((a:any)=>a.word)).not.toEqual(expect.arrayContaining(['bocor']));
+    expect(top.json.answers.map((a:any)=>a.word)).not.toContain('makanan');
+    for(let n=1;n<5;n++)expect(top.json.answers[n].score).toBeLessThanOrEqual(top.json.answers[n-1].score);
+    expect((await request(`/runs/${run.id}/stages/1/top-answers`)).status).toBe(409);
+    const stranger=(await request('/daily',undefined,'')).cookie!;
+    expect((await request(path,undefined,stranger)).status).toBe(404);
+    snapshot.stages[0].scores.restoran.score=0;
+    store.orm.update(daily).set({snapshot:JSON.stringify(snapshot)}).where(eq(daily.date,row.date)).run();
+    app=createApp(store,()=>now);
+    expect((await request(path)).json).toEqual(top.json);
+    expect(store.sqlite.prepare('SELECT result FROM answers WHERE run_id=? AND stage=0').get(run.id)).toEqual(saved);
+  });
+  it('reveals the correct random round after skip without exposing the next round',async()=>{
+    const {compileRandomPool,publishRandomPool}=await import('../scripts/content.js');
+    publishRandomPool(store,compileRandomPool(store,true),true);
+    const run=(await request('/random/runs',{})).json;
+    const answered=(await request(`/runs/${run.id}/answers`,{stage:0,skip:true})).json;
+    const top=await request(`/runs/${run.id}/stages/0/top-answers`);
+    expect(top.status).toBe(200);expect(top.json.answers).toHaveLength(5);
+    expect(top.json.answers[0].word).toBe(answered.results[0].best);
+    expect((await request(`/runs/${run.id}/stages/1/top-answers`)).status).toBe(409);
+  });
+});

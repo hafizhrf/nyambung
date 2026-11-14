@@ -72,7 +72,7 @@ beforeEach(() => {
       .prepare("INSERT INTO players VALUES(?,?)")
       .run(p.id, "2026-10-26");
   publishRandomPool(store, compileRandomPool(store, true), true);
-  service = createMabar(store, () => now);
+  service = createMabar(store, () => now, limit=>limit-1);
 });
 /** The published Tebak Cepat stage behind the current round (demo bank). */
 function quickStage(room: string) {
@@ -240,7 +240,11 @@ describe("server authoritative matches", () => {
     expect(view.match!.clues).toEqual(stage.clues);
     expect(JSON.stringify(view)).not.toContain(`"${stage.best}"`);
     cmd(room, players[0], "answer", stage.best);
-    expect(service.view(room, players[1]).match!.reveal).toBeUndefined();
+    const waiting=service.view(room, players[1]);
+    expect(waiting.match!.reveal).toBeUndefined();
+    expect(waiting.match!.answered).toEqual([players[0].id]);
+    expect(waiting.members.every(player=>player.score===0)).toBe(true);
+    expect(JSON.stringify(waiting)).not.toContain(`"${stage.best}"`);
     const stale = {
       id: randomUUID(),
       type: "answer",
@@ -256,6 +260,7 @@ describe("server authoritative matches", () => {
     expect(view.match!.reveal?.answers).toHaveLength(2);
     expect(view.members[0].rank).toBe(view.members[1].rank);
     deadline(room);
+    expect(service.view(room,players[1]).match!.answered).toEqual([]);
     expect(() => service.command(room, players[0], stale)).toThrow("Tahap");
     while (service.view(room, players[0]).match!.phase !== "results")
       deadline(room);
@@ -311,7 +316,6 @@ describe("server authoritative matches", () => {
     const other = players.find((p) => p.id !== who.id && p.id < "p2")!;
     expect(view.match!.turnSeconds).toBe(10);
     expect(() => cmd(room, other, "answer", "hujan")).toThrow("giliran");
-    expect(() => cmd(room, who, "answer", "nasi")).toThrow("huruf H");
     cmd(room, who, "answer", "hujan");
     view = service.view(room, players[0]);
     // A correct word passes the turn immediately, without a reveal pause.
@@ -322,40 +326,63 @@ describe("server authoritative matches", () => {
     cmd(room, who, "answer", "ikan");
     cmd(room, other, "answer", "nanas");
     cmd(room, who, "answer", "sabun");
-    expect(() => cmd(room, other, "answer", "nasi")).toThrow("sudah dipakai");
+    const unchanged=service.view(room,other).match;
+    expect(()=>cmd(room, other, "answer", "nasi")).toThrow('sudah dipakai');
+    expect(service.view(room,other).match).toEqual(unchanged);
+    expect(service.view(room,other).match!.lives).toEqual({[who.id]:2,[other.id]:2});
     expect(service.view(room, other).match!.used).toEqual(
       expect.arrayContaining(["rumah", "hujan", "nasi", "ikan", "nanas", "sabun"]),
     );
   });
-  it("Sambung Kata eliminates a player who runs out of time and crowns the survivor", () => {
-    const room = setup("word", 3);
-    let view = start(room, 3);
-    const first = view.match!.turn!;
+  it('Sambung Kata spends two lives, ignores repeated/stale commands and eliminates only at zero',()=>{
+    const room=setup('word');let view=start(room);
+    const first=players.find(p=>p.id===view.match!.turn)!,other=players.find(p=>p.id!==first.id&&p.id<'p2')!;
+    expect(view.match!.lives).toEqual({[first.id]:2,[other.id]:2});
+    expect(()=>cmd(room,other,'answer','hujan')).toThrow('giliran');
+    const stale={matchId:view.match!.id,stage:view.match!.stage};
+    const id=cmd(room,first,'answer','NaSi');
+    view=service.view(room,first);
+    expect(view.match).toMatchObject({phase:'reveal',lives:{[first.id]:1,[other.id]:2},eliminated:[]});
+    expect(view.match!.reveal!.lostLife).toMatchObject({playerId:first.id,remaining:1,attempt:'NaSi',prefix:'h'});
+    const examples=view.match!.reveal!.lostLife!.examples!;expect(examples.length).toBe(3);expect(examples.length).toBeLessThanOrEqual(3);
+    for(const word of examples){expect(word.startsWith('h')).toBe(true);expect(lexicon).toContain(word);expect(view.match!.used).not.toContain(word);}
+    expect(service.view(room,other).match!.reveal!.lostLife).toEqual(view.match!.reveal!.lostLife);
+    expect(view.match!.reveal!.lostLife!.reason).toContain('H sesuai pilihan server');
+    cmd(room,first,'answer','nasi',id);
+    expect(service.view(room,first).match!.lives![first.id]).toBe(1);
     deadline(room);
-    view = service.view(room, players[0]);
-    expect(view.match).toMatchObject({ phase: "reveal", eliminated: [first] });
-    expect(view.match!.reveal?.eliminated).toBe(first);
+    expect(()=>service.command(room,first,{id:randomUUID(),type:'answer',payload:'nasi',...stale})).toThrow('Tahap');
+    cmd(room,other,'answer','zzzzzzzz');deadline(room);
+    cmd(room,first,'answer','nasi');view=service.view(room,first);
+    expect(view.match!.lives![first.id]).toBe(0);
+    expect(view.match!.reveal!.eliminated).toBe(first.id);
     deadline(room);
-    view = service.view(room, players[0]);
-    expect(view.match!.phase).toBe("playing");
-    const second = view.match!.turn!;
-    expect(second).not.toBe(first);
-    const p = players.find((x) => x.id === second)!;
-    cmd(room, p, "answer", "hujan");
-    view = service.view(room, players[0]);
-    // The eliminated player is skipped when the turn wraps around.
-    expect(view.match!.turn).not.toBe(first);
-    const third = view.match!.turn!;
-    expect(() =>
-      cmd(room, players.find((x) => x.id === first)!, "answer", "nasi"),
-    ).toThrow("gugur");
+    expect(service.view(room,other).match!.phase).toBe('results');
+    expect(service.view(room,other).match!.lives![other.id]).toBe(1);
+  });
+  it('Sambung Kata removes one life per timeout and crowns the final survivor',()=>{
+    const room=setup('word',3);let view=start(room,3);
+    const first=view.match!.turn!;
+    deadline(room);view=service.view(room,players[0]);
+    expect(view.match).toMatchObject({phase:'reveal',eliminated:[],lives:{[first]:1}});
+    expect(view.match!.reveal!.eliminated).toBeUndefined();
+    expect(view.match!.reveal!.lostLife!.attempt).toBeUndefined();
+    expect(view.match!.reveal!.lostLife!.examples!.length).toBe(3);
+    deadline(room);view=service.view(room,players[0]);
+    const second=view.match!.turn!,winner=players.find(p=>p.id===second)!;
+    cmd(room,winner,'answer','hujan');
+    const third=service.view(room,players[0]).match!.turn!;
+    deadline(room);deadline(room); // Third loses one life, back to first.
+    deadline(room);view=service.view(room,players[0]); // First loses the last life.
+    expect(view.match!.reveal!.eliminated).toBe(first);
     deadline(room);
-    deadline(room);
-    view = service.view(room, players[0]);
-    expect(view.match!.phase).toBe("results");
-    const winner = view.members.find((m) => m.id === second)!;
-    expect(winner).toMatchObject({ rank: 1, score: 600 });
-    expect(view.members.find((m) => m.id === third)!.score).toBe(0);
+    expect(()=>cmd(room,players.find(p=>p.id===first)!,'answer','nasi')).toThrow('gugur');
+    deadline(room);deadline(room); // Second loses one life.
+    deadline(room);deadline(room); // Third loses the last life.
+    view=service.view(room,players[0]);
+    expect(view.match!.phase).toBe('results');
+    expect(view.members.find(p=>p.id===second)).toMatchObject({rank:1,score:600});
+    expect(view.match!.lives).toMatchObject({[first]:0,[second]:1,[third]:0});
   });
   for (const count of [3, 4, 12])
     it(`rotates ${count} private chains and completes gallery/voting`, () => {
@@ -500,4 +527,46 @@ it("keeps disconnected Discord rooms until Discord confirms their instance ended
   expect(service.view(room.id, identity).id).toBe(room.id);
   await service.reapDiscord(async () => false);
   expect(() => service.view(room.id, identity)).toThrow("ditutup");
+});
+
+import {wordChainSuffixes} from '@nyambung/shared';
+import lexicon from '../content/lexicon.json';
+import {wordChainFamiliarWords} from '../content/word-chain.js';
+it('chooses a single feasible server prefix of 1, 2, 3 or 4 letters and keeps it fixed on retry',()=>{
+  const dictionary=new Set(lexicon.filter(word=>/^[a-z]{2,32}$/.test(word)));
+  const familiar=wordChainFamiliarWords.filter(word=>dictionary.has(word));
+  const used=new Set(['rumah']);let previous='rumah',length=1;
+  service=createMabar(store,()=>now,limit=>{
+    const options=wordChainSuffixes(previous).filter(prefix=>prefix.length<previous.length&&familiar.filter(word=>word.startsWith(prefix)&&!used.has(word)).length>=3).flatMap(prefix=>Array<string>([0,3,3,3,1][prefix.length]).fill(prefix));
+    expect(options.length).toBe(limit);
+    const selected=options.findIndex(prefix=>prefix.length===length);expect(selected).toBeGreaterThanOrEqual(0);return selected;
+  });
+  const room=setup('word');start(room);
+  const steps:[string,number][]=[['hujan',3],['jantung',4],['tungku',2],['kuda',2],['daun',2],['ungu',1],['udang',1],['gagak',1],['kangen',1],['nanti',2],['tikus',1]];
+  const lengths=new Set<number>();
+  for(const [word,nextLength] of steps){
+    const before=service.view(room,players[0]);const who=players.find(p=>p.id===before.match!.turn)!;
+    const prefix=before.match!.requiredPrefix!;lengths.add(prefix.length);expect(word.startsWith(prefix)).toBe(true);
+    expect(()=>cmd(room,who,'answer','rumah')).toThrow('sudah dipakai');
+    expect(service.view(room,who).match).toEqual(before.match);
+    previous=word;length=nextLength;used.add(word);
+    cmd(room,who,'answer',word);
+    const next=service.view(room,who);expect(next.match!.prompt).toBe(word);expect(next.match!.phase).toBe('playing');
+    expect(next.match!.requiredPrefix!.length).toBeLessThan(word.length);
+    if(word==='daun')expect(next.match!.requiredPrefix).not.toBe('daun');
+    if(word==='kangen')expect(next.match!.requiredPrefix).not.toBe('ngen');
+    if(word==='nanti')expect(['ti','i']).toContain(next.match!.requiredPrefix);
+    expect(Object.values(next.match!.lives!).every(lives=>lives===2)).toBe(true);
+  }
+  expect([...lengths].sort()).toEqual([1,2,3,4]);
+});
+it('rejects a player-selected shorter suffix and never rerolls on view or replay',()=>{
+  service=createMabar(store,()=>now,()=>0);
+  const room=setup('word');const before=start(room);const who=players.find(p=>p.id===before.match!.turn)!;
+  expect(before.match!.requiredPrefix!.length).toBeGreaterThan(1);
+  for(let n=0;n<5;n++)expect(service.view(room,who).match!.requiredPrefix).toBe(before.match!.requiredPrefix);
+  const id=cmd(room,who,'answer','hujan');
+  const rejected=service.view(room,who);expect(rejected.match!.phase).toBe('reveal');expect(rejected.match!.lives![who.id]).toBe(1);
+  expect(rejected.match!.reveal!.lostLife!.reason).toContain(before.match!.requiredPrefix!.toUpperCase());
+  cmd(room,who,'answer','hujan',id);expect(service.view(room,who).match).toEqual(rejected.match);
 });

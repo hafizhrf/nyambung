@@ -297,6 +297,36 @@ describe('channel Activity status, leaderboard and recap', () => {
     expect(bot.reports.cardData(channelId,new Date(now.getTime()+7*3600000).toISOString().slice(0,10)).players[0].stageScores).toEqual([1000,0,0,0,0]);
     await createDiscordBot(store,service,()=>now).reports.tick();expect(sent).toHaveLength(1);
   });
+  it('repairs an existing Mabar upload into Daily and keeps it Daily while the lobby persists', async () => {
+    const {createMabar}=await import('../apps/api/src/mabar.js');
+    const mabar=createMabar(store,()=>now.getTime());
+    bot=createDiscordBot(store,service,()=>now,mabar);
+    app=createApp(store,()=>now,{discord:service,bot,mabar});
+    const a=await startPlayer();realDaily();
+    expect((await api('/mabar/discord',a.auth.sessionToken,{})).status).toBe(200);
+    expect(mabar.report(channelId,guildId)?.phase).toBe('lobby');
+    await heartbeat(a.auth,a.run.id);
+    const messageId=String(messageSequence++);
+    messages.push({id:messageId,channelId,author:{id:botId,bot:true},content:'**Nyambung · Sambung Kata**\n1 pemain · Lobby',attachments:[{id:'old-mabar',filename:'nyambung-live.png'}]});
+    store.sqlite.prepare("UPDATE discord_channel_cards SET message_id=?,sent_hash='old-mabar',next_at=0 WHERE channel_id=?").run(messageId,channelId);
+    await bot.reports.tick();
+    expect(sent).toHaveLength(0);
+    expect(messages[0]).toMatchObject({id:messageId,attachments:[{id:0,filename:'nyambung-live.png'}]});
+    expect(messages[0].content).toContain('Daily #');
+    expect(messages[0].content).toContain('Babak 1/5');
+    expect(messages[0].content).not.toContain('Lobby');
+    const upload=fetcher.mock.calls.find(([input,init])=>String(input).endsWith(`/messages/${messageId}`)&&init?.method==='PATCH')![1]!.body as FormData;
+    const {renderLiveCard}=await import('../apps/api/src/discord-card.js');
+    expect(Buffer.from(await (upload.get('files[0]') as File).arrayBuffer())).toEqual(await renderLiveCard(bot.reports.cardData(channelId,'2026-10-22')));
+    await finish(a.auth,a.run.id);
+    now=new Date(now.getTime()+31000);await heartbeat(a.auth,a.run.id);await bot.reports.tick();
+    expect(messages[0].content).toContain('1.000 poin');
+    expect(messages[0].content).not.toContain('Lobby');
+    expect(mabar.report(channelId,guildId)?.phase).toBe('lobby');
+    now=new Date(now.getTime()+31000);const before=fetcher.mock.calls.length;await bot.reports.tick();
+    expect(fetcher.mock.calls.length).toBe(before);
+    expect(sent).toHaveLength(0);
+  });
   it('isolates rankings by channel, excludes demo and random runs, and ranks ties equally', async () => {
     const a=await startPlayer(),b=await startPlayer(bob);
     await heartbeat(a.auth,a.run.id);await finish(a.auth,a.run.id);
@@ -359,18 +389,38 @@ describe('channel Activity status, leaderboard and recap', () => {
     postFailure=0;now=new Date(now.getTime()+61000);await bot.reports.tick();expect(sent).toHaveLength(2);
     expect((await api('/daily',a.auth.sessionToken)).status).toBe(200);
   });
-  it('reuses the same channel card after midnight and across repeated launches', async () => {
+  it('posts a new Daily card after midnight and only edits that day across repeated launches', async () => {
     const a=await startPlayer();await heartbeat(a.auth,a.run.id);await bot.reports.tick();
-    const messageId=messages[0].id;
+    const messageId=messages[0].id,previousContent=messages[0].content;
     for(let launch=0;launch<3;launch++)expect((await interact()).data).toEqual({type:12});
     now=new Date('2026-10-25T17:05:00Z');await bot.reports.tick();
-    expect(sent).toHaveLength(1);expect(messages[0].id).toBe(messageId);
+    expect(sent).toHaveLength(2);expect(messages[0].id).not.toBe(messageId);
+    expect(messages.find(message=>message.id===messageId).content).toBe(previousContent);
+    expect(sent[0].nonce).not.toBe(sent[1].nonce);
+    expect(messages[0].content).toContain('Nyambung · 2026-10-26');
     expect(messages[0].content).toContain('Sedang main · 0 pemain');
-    expect(store.sqlite.prepare('SELECT date,message_id FROM discord_channel_cards').get()).toEqual({date:'2026-10-26',message_id:messageId});
+    expect(store.sqlite.prepare('SELECT date,message_id FROM discord_channel_cards').get()).toEqual({date:'2026-10-26',message_id:messages[0].id});
     expect(messages[0].components[0].components[0]).toMatchObject({label:'Play',custom_id:'nyambung:play'});
     expect((await interact({type:3,data:{custom_id:'nyambung:play'}})).data).toEqual({type:12});
     expect((await interact({data:{name:'launch',type:4}})).data).toEqual({type:12});
-    await bot.reports.tick();expect(sent).toHaveLength(1);
+    now=new Date(now.getTime()+31000);
+    await createDiscordBot(store,service,()=>now).reports.tick();expect(sent).toHaveLength(2);
+  });
+  it('reconciles the previous day before rotating and recovers a timed-out new Daily without duplicating',async()=>{
+    const a=await startPlayer();await heartbeat(a.auth,a.run.id);
+    timeoutAfterSend=true;await bot.reports.tick();expect(sent).toHaveLength(1);
+    const previousId=messages[0].id;
+    now=new Date('2026-10-22T17:00:00Z');
+    await createDiscordBot(store,service,()=>now).reports.tick();
+    expect(sent).toHaveLength(1);
+    expect(store.sqlite.prepare('SELECT date,message_id,uncertain FROM discord_channel_cards').get()).toEqual({date:'2026-10-22',message_id:previousId,uncertain:0});
+    timeoutAfterSend=true;await bot.reports.tick();expect(sent).toHaveLength(2);
+    const currentId=messages[0].id;expect(currentId).not.toBe(previousId);
+    expect(messages[0].content).toContain('Nyambung · 2026-10-23');
+    now=new Date(now.getTime()+61000);
+    await createDiscordBot(store,service,()=>now).reports.tick();
+    expect(sent).toHaveLength(2);
+    expect(store.sqlite.prepare('SELECT date,message_id,uncertain,revision FROM discord_channel_cards').get()).toEqual({date:'2026-10-23',message_id:currentId,uncertain:0,revision:1});
   });
   it('resurfaces a buried card for a new player, with a cooldown and exact-revision retry',async()=>{
     const a=await startPlayer();await heartbeat(a.auth,a.run.id);await bot.reports.tick();

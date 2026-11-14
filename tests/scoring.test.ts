@@ -43,3 +43,27 @@ it('removes shared context without mutating cached provider vectors', () => {
   expect(centered.get('a')).toEqual([0, 1]); expect(centered.get('b')).toEqual([0, -1]);
   expect(original.get('a')).toEqual([10, 1]);
 });
+
+import {reviewClosestStage,reviseClosestStage} from '../apps/api/src/scoring.js';
+it('recognizes penat as lelah while keeping unreviewed inflections below true synonyms',()=>{
+  const words=['lelah','letih','penat','capek','lesu','berlelah','kelelahan','lelahnya','bugar'];
+  const vectors=new Map(words.map(word=>[word,word==='penat'?[.1,1]:[1,.01]]));
+  const stage={kind:'closest' as const,clues:['lelah'],best:'letih',explanation:'Letih berarti lelah setelah berkegiatan.',overrides:{capek:[1],lesu:[.9]},excluded:['bugar']};
+  const result=compileStage(stage,words,vectors);
+  for(const word of ['letih','penat','capek']) expect(result.scores[word].score).toBe(1000);
+  for(const word of ['berlelah','kelelahan','lelahnya']) expect(result.scores[word].score).toBeLessThan(1000);
+  expect(result.scores.lesu.score).toBe(900);
+  expect(result.scores.bugar.score).toBe(0);
+  expect(result.scores.penat.rank).toBe(1);
+  expect(result.referenceAnswers).toContain('penat');
+  expect(result.referenceAnswers).not.toContain('lelahnya');
+  expect(stage.overrides).not.toHaveProperty('penat');
+  const revised=reviseClosestStage({...result,scores:{...result.scores,penat:{score:546,connections:[.546]},lelahnya:{score:1000,connections:[1]}}});
+  expect(revised.scores.penat.score).toBe(1000);
+  expect(revised.scores.lelahnya.score).toBe(949);
+  expect(result.scores.penat.score).toBe(1000);
+});
+it('does not join different meaning groups through a shared synonym',()=>{
+  const reviewed=reviewClosestStage({kind:'closest' as const,clues:['lembut'],best:'halus',explanation:'Tekstur yang terasa lembut.',overrides:{}},new Set(['lembut','halus','lelah','penat']));
+  expect(reviewed.overrides).toEqual({halus:[1]});
+});

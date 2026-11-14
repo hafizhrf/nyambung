@@ -2,12 +2,19 @@
 
 Satu tema gelap untuk website, Discord Activity, dan floating/PiP: font pixel tegak Press Start 2P,
 bingkai pixel emas, petunjuk hijau/ungu, serta skor bergaya mesin arcade.
-Tombol **Efek CRT** tersedia di **Pengaturan**, bersama Motion dan Suara. Tombol ini mengatur lengkungan tabung, vignette, phosphor RGB, scanline statis, bloom berwarna, serta gelombang horizontal pelan.
+Tombol **Efek CRT** tersedia di **Pengaturan**, bersama Motion dan Suara. Tombol ini mengatur vignette, phosphor RGB, scanline statis, bloom berwarna, serta gelombang horizontal pelan.
 Judul beranda dan rekap memotong garis bingkai seperti menu konsol lama.
-Pada logo beranda, huruf Y, U, dan tanda seru meredup seperti lampu reklame,
-dengan siklus berbeda (11–17 detik). Animasi hanya mengubah opacity huruf,
-sehingga bloom dan phosphor tetap mengikuti huruf tersebut. Motion off, reduced
-motion, CRT off, dan tab tidak aktif membuat seluruh huruf kembali menyala tetap.
+Logo beranda memakai kedip lampu cepat bertahap (2,4–3,1 detik). Logo navbar
+tetap menyala stabil; keduanya memakai bloom lokal tiga lapis saat CRT on. Motion off, reduced
+motion, CRT off, atau tab tersembunyi menghentikan kedip; bloom tetap ada saat
+Motion off. Tidak ada filter blur atau displacement pada konten.
+
+Pergantian halaman Solo, fase Mabar, dan dialog memakai efek power-on CRT
+selama sekitar 0,2 detik: panel membuka dari garis horizontal, lalu isi tampil
+bertahap seperti phosphor. Angka skor dan perubahan input ke tombol Lanjut
+memakai easing langkah pixel. Transform dibersihkan setelah selesai. Animasi
+Mabar hanya dipicu perubahan tampilan/fase, tidak oleh tick timer atau pesan
+socket; fokus, input, dan kanvas tidak di-remount untuk animasi.
 Papan permainan hanya menampilkan kata dan kekuatan koneksi, tanpa label jenis
 babak, nomor petunjuk, atau label jawaban. Kata tetap satu baris; kolom dan ukuran
 font menyesuaikan lebar kata setelah font lokal selesai dimuat. Rekap memakai
@@ -24,7 +31,14 @@ landscape pendek tetap memakai dua kolom. Input HP memakai font minimal 16 px.
 Saat keyboard virtual menutup setelah submit, status keyboard dipertahankan
 sampai tinggi visual viewport pulih, walaupun fokus sudah ke tombol Lanjut.
 Skor babak memakai angka dan penyebut pada dua baris terkontrol; `/ 1.000`
-tetap satu baris utuh dan ukuran angka mengikuti lebar kolom skor. Judul rekap
+tetap satu baris utuh dan ukuran angka mengikuti lebar kolom skor. Peringkat jawaban dipisah ke baris metadata di bawah skor dan jawaban terbaik.
+Tombol **Top 5 kata** membuka dialog tersendiri agar kartu permainan tetap ringkas;
+setelah selesai, daftar tiap babak bisa dibuka lagi dari rekap.
+Daftar hanya tersedia untuk babak yang sudah dijawab/dilewati dan memakai edisi
+sesi yang sama, termasuk sesi lama; API tidak mengubah hasil yang tersimpan.
+Indikator loading tombol Daily/Random mengikuti request yang dipilih dan pulih
+setelah kegagalan request.
+Judul rekap
 mendapat ruang di atas bingkai serta jarak dari tanggal di dalamnya. Rekap yang
 tinggi, termasuk leaderboard Discord, bergulir di area konten tanpa menimpa header.
 Jika ruang keyboard sangat pendek, hanya bagian dalam kartu yang bergulir;
@@ -40,23 +54,18 @@ bingkai persegi di bawah garis dihapus.
 Pengisian koneksi juga bertahap; panjangnya tetap sesuai persentase setiap petunjuk.
 Motion off dan reduced motion menampilkan jalur statis.
 
-Lengkungan memakai peta displacement lokal melalui filter SVG pada satu lapisan
-layar dengan kekuatan 0,048: header, garis pemisah, bingkai luar, dan permainan ikut diproses. Panel
-tidak lagi melengkung sendiri-sendiri. Dialog native mendapat filter statis
-tersendiri karena dirender di top layer browser.
-Phosphor memakai pelembutan 0,45 × 0,3 px dengan bloom 2,4 px dan glow berwarna
-pada kata/skor. Kisi 4 × 3 px menggabungkan kolom RGB dengan scanline gelap;
-teksturnya tidak menambahkan pita putih di atas konten.
+Efek cembung di halaman dihapus: bingkai luar, panel, teks, dan dialog tidak
+memakai displacement atau filter geometri. Bloom berwarna memakai text-shadow
+dan glow bingkai; vignette, kisi RGB, scanline statis, serta sapuan cahaya tetap
+tersedia melalui tombol Efek CRT. Tidak ada blur atau distorsi layar penuh.
 
 Sapuan cahaya selebar 16% tinggi layar bergerak dari atas ke bawah dalam siklus
-12 detik melalui transform CSS. Band lokal menaikkan brightness/saturasi konten
-yang dilaluinya, dengan mask gradasi agar tidak terlihat sebagai kotak putih.
-Tidak ada timer 500 ms atau displacement bergerak yang membuat huruf meloncat;
-lengkungan tabung dan bloom tetap statis. Area klik dan ukuran layout tidak bergeser.
-Tes memeriksa kemajuan posisi pada 30 frame berturut-turut dan perubahan pixel
-konten saat band melintas. Gerakan berhenti saat Motion off, reduced motion,
-tab tidak aktif, atau CRT off. CRT off menghapus filter, tekstur, dan vignette.
-Peta dapat dibuat ulang lewat `node --import tsx scripts/crt-map.ts`.
+12 detik melalui transform CSS pada gradasi transparan. Tidak ada backdrop-filter,
+mask animasi, atau filter SVG pada seluruh viewport. Motion off, reduced motion, CRT off,
+dan tab tersembunyi menghentikan gerakan. Tes memeriksa posisi hover/klik di ujung
+header, kemajuan sapuan, pixel cahaya, dan ukuran layout saat CRT diubah.
+CRT off menghapus glow, tekstur, vignette, dan sapuan cahaya.
+Ekspor gambar tetap memakai pemrosesan pixel tersendiri; tidak membebani interaksi halaman.
 
 Statistik memakai kolom `minmax(0, 1fr)`, ukuran huruf mengikuti lebar dialog,
 dan angka dipaskan ke kolom setelah font selesai dimuat. Dialog dapat bergulir
@@ -71,11 +80,16 @@ Versi desain kartu Discord 4 memicu pembaruan kartu lama pada tick bot setelah
 backend diperbarui. Nama Unicode dan avatar tetap dirender sebelum efek diterapkan.
 
 
-Pengukuran lokal Chromium headless pada 1280 × 800 (sampel 5 detik per mode,
-tanpa perekaman video dan browser pengujian lain) menghasilkan median 16,7 ms,
-p95 16,7 ms saat CRT bergerak; CRT statis dan nonaktif juga sekitar 16,7 ms.
-Ini pemeriksaan lokal, bukan jaminan performa perangkat lain. Data pengukuran
-tersedia di [hasil frame time](screenshots/arcade-crt-performance.json).
+Catatan historis sebelum penghapusan cembung: pengukuran ulang Chromium headless pada 1920 × 1080 memakai fixture yang sama,
+satu browser, dan sampel requestAnimationFrame selama 4 detik. Median interval
+frame turun dari 483,3 ms menjadi 16,7 ms; p95 dari 699,9 ms menjadi 16,8 ms.
+Sampel beranda dengan Mabar aktif menghasilkan 241 callback tanpa interval di atas 25 ms, dibandingkan
+10 callback pada versi displacement. Ini pengukuran animasi lokal pada server
+bersama, bukan field Core Web Vitals atau jaminan performa perangkat lain.
+Papan permainan dengan input fokus dan jalur animasi menghasilkan 149 callback,
+median 16,7 ms dan p95 66,6 ms pada software renderer ini; efek panel masih
+memiliki biaya saat isinya berubah. Data kedua skenario tersedia di
+[hasil perbandingan frame time](screenshots/arcade-crt-frame-performance.json).
 
 ## Screenshot
 

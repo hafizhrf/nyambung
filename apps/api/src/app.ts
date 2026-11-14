@@ -107,6 +107,11 @@ export function createApp(store: Store, clock: () => Date = () => new Date(), in
     if (!parsed.success) return c.json({ error:'Tanggal tidak valid.' }, 400);
     return c.json(service.start(c.get('playerId'), parsed.data.date));
   });
+  app.get('/api/runs/:id/stages/:stage/top-answers', c => {
+    const stage = c.req.param('stage');
+    if (!/^[0-4]$/.test(stage)) return c.json({ error: 'Babak tidak valid.' }, 400);
+    return c.json(service.topAnswers(c.req.param('id'), c.get('playerId'), Number(stage)));
+  });
   app.get('/api/runs/:id', c => c.json(service.view(c.req.param('id'), c.get('playerId'))));
   app.post('/api/runs/:id/answers', async c => {
     const parsed = answerInput.safeParse(await c.req.json().catch(() => null));

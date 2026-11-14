@@ -47,3 +47,7 @@ export const closestGroups = [
 ].map(row => row.split(' '));
 const pairs = new Set(closestGroups.flatMap(group => group.flatMap(a => group.filter(b => a !== b).map(b => `${a}|${b}`))));
 export const isReviewedClosest = (clue:string, answer:string) => pairs.has(`${clue}|${answer}`);
+
+// Match both clue and intended answer to keep overlapping senses separate.
+export const reviewedClosestAlternatives = (clue:string,best:string) =>
+  [...new Set(closestGroups.filter(group=>group.includes(clue)&&group.includes(best)).flat())].filter(word=>word!==clue);

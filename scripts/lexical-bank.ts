@@ -42,7 +42,7 @@ export function compileLexicalBank(data:RandomGenerator) {
   if(!alternatives.length) continue;
   const best=alternatives[0];
   const antonyms=rawSynonyms.filter(row=>row.lemmas.includes(clue)&&row.lemmas.includes(best)).flatMap(row=>row.antonyms).filter(word=>words.has(word)&&!group.includes(word));
-  synonyms.push({concept:`reviewed-meaning-${index}`,kind:'closest',clues:[clue],best,explanation:'',overrides:Object.fromEntries(alternatives.slice(1).map(word=>[word,[.98]])),excluded:[...new Set(antonyms)]});
+  synonyms.push({concept:`reviewed-meaning-${index}`,kind:'closest',clues:[clue],best,explanation:'',overrides:Object.fromEntries(alternatives.slice(1).map(word=>[word,[1]])),excluded:[...new Set(antonyms)]});
   seen.add(clue);
  }
  return {relations,synonyms};

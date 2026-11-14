@@ -1,10 +1,9 @@
-import { modeLabels } from '@nyambung/shared';
 import type { MabarService } from './mabar.js';
 import { createHash } from 'node:crypto';
 import type { Store } from './db.js';
 import { DiscordHttpError, type DiscordService } from './discord.js';
 import { addDays, wibDate } from './time.js';
-import { LIVE_CARD_STYLE_VERSION, renderLiveCard, renderMabarCard, type LiveCard, type CardPlayer } from './discord-card.js';
+import { LIVE_CARD_STYLE_VERSION, renderLiveCard, type LiveCard, type CardPlayer } from './discord-card.js';
 
 interface Report { channel_id:string; date:string; kind:'live'|'recap'; guild_id:string; message_id:string|null; payload:string|null; sent_hash:string|null; uncertain:number; revision?:number; last_bump_at?:number; active_keys?:string }
 interface Standing { discord_id:string; total:number; completed_at:string|null }
@@ -12,7 +11,7 @@ interface Active { run_id:string|null; name:string; avatar:string|null; total:nu
 const hash = (text:string) => createHash('sha256').update(text).digest('hex');
 const mention = (id:string) => `<@${id}>`;
 
-export function createDiscordReports(store:Store, discord:DiscordService, clock:()=>Date = () => new Date(), mabar?:MabarService) {
+export function createDiscordReports(store:Store, discord:DiscordService, clock:()=>Date = () => new Date(), _mabar?:MabarService) {
   const { client, config } = discord;
   let running = false;
   const marker = (row:Pick<Report,'date'|'kind'|'revision'>) => row.kind==='live' ? `Nyambung · live · ${row.revision??0}` : `Nyambung · recap · ${row.date}`;
@@ -63,8 +62,6 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
       GROUP BY p.instance_id,p.discord_id ORDER BY p.discord_id`).all(config.guildId,channelId,clock().getTime()-90000) as Active[] : [];
   }
   function live(channelId:string,date:string) {
-    const party=mabar?.report(channelId,config.guildId);
-    if(party)return `**Nyambung · ${modeLabels[party.mode]}**\n${party.players.length} pemain · ${party.phase==='results'?'Selesai':party.phase==='lobby'?'Lobby':'Bermain'}${party.phase==='results'?'\n'+[...party.players].sort((a,b)=>(b.score??0)-(a.score??0)).map(p=>`${p.name} · ${p.score}`).join('\n'):''}`;
     const players=activePlayers(channelId,date);
     const lines=players.slice(0,12).map(p=>`${mention(p.discord_id)} · ${p.mode==='random'?'Acak':p.mode?`${p.date!==date?'Arsip':'Daily'} #${String(p.number??0).padStart(3,'0')}`:'Lobi'} · ${p.completed_at?'Selesai':p.mode?`Babak ${Math.min(5,p.stages+1)}/5`:'Siap main'}`);
     if(players.length>12)lines.push(`+${players.length-12} pemain lain`);
@@ -111,7 +108,7 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
   async function publish(row:Report) {
     const now=clock().getTime();
     const content=row.payload ?? live(row.channel_id,row.date);
-    const party=row.kind==='live'?mabar?.report(row.channel_id,config.guildId):null;
+    // This channel card belongs to Daily; a persistent Mabar lobby must not replace it.
     const card=row.kind==='live'?cardData(row.channel_id,row.date):undefined;
     const keys=card?activePlayers(row.channel_id,row.date).map(player=>`${player.discord_id}:${player.run_id??'lobby'}`):[];
     let previous:string[]=[];try{previous=JSON.parse(row.active_keys??'[]');}catch{ /* Old cards start with no players. */ }
@@ -121,7 +118,7 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
     const canBump=!!card && !!row.message_id && !row.uncertain && joined && now-lastBump>=600000;
     const body={content:`${content}\n-# ${marker(row)}`,allowed_mentions:{parse:[]},flags:4096,
       ...(card?{components:[{type:1,components:[{type:2,style:1,label:'Play',custom_id:'nyambung:play'}]}],attachments:[{id:0,filename:'nyambung-live.png',description:'Pemain Nyambung dan progres babak.'}]}:{})};
-    let digest=hash(JSON.stringify({body,card,party,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
+    let digest=hash(JSON.stringify({body,card,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
     if(row.sent_hash===digest && !canBump){
       if(card)store.sqlite.prepare('UPDATE discord_channel_cards SET active_keys=? WHERE channel_id=? AND sent_hash IS ? AND lease_until<=?').run(JSON.stringify(keys),row.channel_id,row.sent_hash,now);
       return;
@@ -136,9 +133,9 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
         store.sqlite.prepare('UPDATE discord_channel_cards SET message_id=NULL,revision=?,uncertain=1 WHERE channel_id=?').run(row.revision,row.channel_id);
         messageId=null;bumped=true;
         body.content=`${content}\n-# ${marker(row)}`;
-        digest=hash(JSON.stringify({body,card,party,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
+        digest=hash(JSON.stringify({body,card,...(card?{cardStyle:LIVE_CARD_STYLE_VERSION}:{})}));
       }
-      const file=card?{name:'nyambung-live.png',data:party?await renderMabarCard(party):await renderLiveCard(card)}:undefined;
+      const file=card?{name:'nyambung-live.png',data:await renderLiveCard(card)}:undefined;
       if(!messageId&&row.uncertain&&!bumped)messageId=await findExisting(row);
       if(messageId){
         try {await client.request(`/channels/${row.channel_id}/messages/${messageId}`,{method:'PATCH',body,file});}
@@ -168,7 +165,11 @@ export function createDiscordReports(store:Store, discord:DiscordService, clock:
           WHERE c.guild_id=? AND r.mode='daily' AND r.date=? AND v.demo=0 AND c.seen_at<=?`).all(config.guildId,yesterday,Date.parse(`${date}T00:00:00+07:00`)) as {channel_id:string}[];
         for(const channel of channels)store.sqlite.prepare(`INSERT OR IGNORE INTO discord_channel_reports(channel_id,date,kind,guild_id,payload) VALUES (?,?,'recap',?,?)`).run(channel.channel_id,yesterday,config.guildId,recap(channel.channel_id,yesterday));
       }
-      store.sqlite.prepare(`UPDATE discord_channel_cards SET date=?,sent_hash=NULL,payload=NULL,next_at=0 WHERE guild_id=? AND date<>? AND lease_until<=?`).run(date,config.guildId,date,now);
+      // Finish reconciling an ambiguous send before advancing its revision.
+      // Each new Daily gets a fresh message; progress only edits within that day.
+      store.sqlite.prepare(`UPDATE discord_channel_cards SET date=?,message_id=NULL,revision=revision+1,
+        sent_hash=NULL,payload=NULL,next_at=0,last_bump_at=0,active_keys='[]',last_error=NULL
+        WHERE guild_id=? AND date<>? AND lease_until<=? AND uncertain=0`).run(date,config.guildId,date,now);
       const cards=store.sqlite.prepare(`SELECT * FROM discord_channel_cards WHERE guild_id=? AND next_at<=? AND lease_until<=? ORDER BY next_at LIMIT 50`).all(config.guildId,now,now) as Report[];
       const recaps=store.sqlite.prepare(`SELECT * FROM discord_channel_reports WHERE guild_id=? AND next_at<=? AND lease_until<=? AND kind='recap' AND sent_hash IS NULL ORDER BY date LIMIT 50`).all(config.guildId,now,now) as Report[];
       const rows=[...cards,...recaps];

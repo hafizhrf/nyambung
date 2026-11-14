@@ -1,0 +1,63 @@
+{
+  "measured_at": "2026-10-26T16:29:22.421236+00:00",
+  "method": "Chromium headless on a shared server/software rendering, 1920x1080, four seconds of requestAnimationFrame intervals plus CDP trace per sample. Same Solo in-memory fixture, one browser at a time, no CPU throttling. Final samples have Mabar enabled and static per-panel displacement; baseline used full-viewport displacement and blur. Not field Core Web Vitals or a device-wide guarantee.",
+  "before": {
+    "label": "before",
+    "viewport": "1920x1080",
+    "durationMs": 4216.300000190735,
+    "frames": 10,
+    "p50FrameMs": 483.2999999999993,
+    "p95FrameMs": 699.9000000000005,
+    "framesOver25ms": 10,
+    "mainThreadTaskMs": 59.09799999999999,
+    "scriptMs": 26.387,
+    "totals": {
+      "UpdateLayoutTree": {
+        "count": 10,
+        "ms": 3.5109999999999997
+      }
+    }
+  },
+  "after": {
+    "label": "final",
+    "viewport": "1920x1080",
+    "durationMs": 4001.8999994277956,
+    "frames": 241,
+    "p50FrameMs": 16.699999999999818,
+    "p95FrameMs": 16.799999999999272,
+    "framesOver25ms": 0,
+    "mainThreadTaskMs": 169.219,
+    "scriptMs": 30.509999999999998,
+    "totals": {
+      "UpdateLayoutTree": {
+        "count": 241,
+        "ms": 18.665000000000003
+      }
+    }
+  },
+  "game_with_focused_input": {
+    "label": "final-game",
+    "viewport": "1920x1080",
+    "durationMs": 4019.5000003814694,
+    "frames": 149,
+    "p50FrameMs": 16.700000000000728,
+    "p95FrameMs": 66.60000000000036,
+    "framesOver25ms": 65,
+    "mainThreadTaskMs": 255.496,
+    "scriptMs": 54.549,
+    "totals": {
+      "UpdateLayoutTree": {
+        "count": 149,
+        "ms": 35.154
+      },
+      "Paint": {
+        "count": 12,
+        "ms": 3.9389999999999996
+      },
+      "RasterTask": {
+        "count": 12,
+        "ms": 3.2920000000000003
+      }
+    }
+  }
+}

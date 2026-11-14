@@ -1,7 +1,7 @@
 import {bridgeSeparation,areSynonyms} from './bridge-quality.js';
 import {semanticSimilarity} from './vector-index.js';
 import { predictDifficulty, trainDifficulty, type DifficultyModel } from './adaptive.js';
-import { combinationKey, reviewedAnswers, evaluateRound, type RandomGenerator, type GeneratedRound, type GeneratedSelection } from './random-generator.js';
+import { combinationKey, reviewedAnswers, evaluateRound, supportsBridgeClues, type RandomGenerator, type GeneratedRound, type GeneratedSelection } from './random-generator.js';
 import type { PublishedStage } from './scoring.js';
 export interface Exposure { best:string; clues:string[] }
 export interface RetrievalContext { exposures:Exposure[]; model:DifficultyModel }
@@ -37,6 +37,7 @@ export function retrieveCandidates(data:RandomGenerator,kind:'bridge2'|'bridge3'
         const sets=kind==='bridge2'?[[x,y]]:groups.slice(b+1).flatMap(group=>group.map(z=>[x,y,z]));
         for(const clues of sets) {
           if(relation.source==='wordnet-bahasa' && clues.some(clue=>areSynonyms(clue,relation.answer))) continue;
+          if(!supportsBridgeClues(data,relation,clues)) continue;
           const separation=bridgeSeparation(data,clues,relation.answer);
           if(!separation.accepted) continue;
           const round:GeneratedRound={kind,clues};

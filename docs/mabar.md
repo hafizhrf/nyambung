@@ -1,6 +1,6 @@
 # Mabar Nyambung
 
-Mabar memiliki empat mode dan tidak menulis ke run, statistik, atau leaderboard Daily solo.
+Mabar memiliki tiga mode dan tidak menulis ke run, statistik, atau leaderboard Daily solo.
 Website menyediakan Solo/Mabar, profil guest, avatar, daftar room publik, room tidak terdaftar,
 password, dan link `/?room=KODE`. Guest mengikuti cookie browser; menghapus cookie membuat
 identitas baru. Password room bukan akun pengguna.
@@ -10,9 +10,29 @@ identitas baru. Password room bukan akun pengguna.
 | Mode | Pemain | Pengaturan | Penilaian |
 | --- | --- | --- | --- |
 | Rantai Gambar | 3–12 | Teks/gambar 20/40, 30/60, atau 45/90 detik | Semua memulai rantai; operan melingkar, galeri, voting 30 detik; tidak boleh memilih rantai sendiri |
-| Tebak Cepat | 2–12 | 5/10/15 soal, 15/20/30 detik | Jawaban pasti dari 100 soal lokal, 500–1.000 poin menurut waktu server; satu percobaan/detik |
-| Nyambung Bareng | 2–12 | 5/10 babak, 20/30/45 detik | Paket pool Acak terversi; satu jawaban valid; skor semantik 0–1.000 tanpa bonus kecepatan |
-| Sambung Kata | 2–12 | 3/5/7 putaran, 7/10/15 detik | Huruf terakhir, kamus lokal, tanpa pengulangan; 100 poin/kata; timeout melewati giliran |
+| Tebak Cepat | 2–12 | 5/10/15 soal, 15/20/30 detik | Soal dari bank Acak; skor makna 0–1.000 dikalikan faktor waktu 0,5–1; kata belum dikenal boleh diganti |
+| Sambung Kata | 2–12 | 2 nyawa; waktu giliran turun tiap putaran, minimal 5 detik | 100 poin/kata valid; kata salah/tidak dikenal atau timeout mengurangi 1 nyawa lalu giliran berpindah; 0 nyawa berarti gugur |
+
+Server mengacak satu awalan wajib dari 1–4 huruf terakhir kata sebelumnya di setiap
+giliran. Contohnya `JAN` dari hujan atau `NGEN` dari kangen. Hanya akhiran yang
+masih mempunyai setidaknya tiga kata lanjutan umum yang belum terpakai yang dapat
+dipilih. Akhiran tidak boleh sama dengan seluruh kata sebelumnya, misalnya DAUN
+tidak akan menjadi awalan wajib setelah daun. Jika semua akhiran terlalu sulit,
+server mengganti kata awal tanpa penalti. Pilihan disimpan
+di server dan tidak berubah saat refresh atau jawaban ditolak. Pemain tidak memilih
+jumlah huruf sendiri. Awalan 1, 2, dan 3 huruf mempunyai bobot kemunculan yang sama jika sama-sama
+memenuhi syarat; 4 huruf tetap lebih jarang. Semua panjang tetap wajib mempunyai
+setidaknya tiga pilihan kata umum yang belum dipakai.
+Setelah salah atau timeout, ringkasan tampil lima detik
+dengan jawaban yang dikirim (jika ada), alasan gagal, awalan wajib, dan hingga tiga
+contoh kata umum yang masih sah. Contoh hanya dibuka setelah giliran gagal. Kata yang sudah dipakai ditolak tanpa mengurangi nyawa
+atau memindahkan giliran; timer tetap berjalan dan input bergoyang (mengikuti Motion).
+Tebak Cepat menampilkan penanda “Sudah nebak” di daftar pemain kanan; hanya identitas
+pemain yang dibagikan sebelum reveal, tanpa kata jawaban maupun skor babak.
+
+Dua hati penuh/kosong menampilkan sisa nyawa di arena dan daftar pemain.
+Server menyimpan nyawa pada state pertandingan: reconnect mempertahankannya;
+command yang terkirim ulang atau sudah kedaluwarsa tidak mengurangi nyawa lagi.
 
 Skor sama berbagi peringkat. Pemain yang bergabung di tengah pertandingan menonton hingga
 pertandingan berikutnya. Semua pemain aktif harus siap sebelum host mulai. Chat hanya tersedia
@@ -31,7 +51,7 @@ instance berakhir. Gangguan API Discord tidak menghapus room.
 
 ## Discord
 
-Dengan mabar aktif, Activity membuka lobby otomatis; Solo tetap ada di menu. Room dikunci ke
+Activity langsung membuka Daily. Lobby bersama dapat dibuka lewat tab Mabar. Room dikunci ke
 `applicationId:instanceId`, guild/channel diverifikasi dari Activity Instance API. Hanya pengguna
 yang mengautentikasi Activity tersebut yang mendapat kursi. Anggota voice channel yang belum
 membuka Activity tidak otomatis menjadi pemain. Nama/avatar mengikuti akun Discord, bukan profil
@@ -121,3 +141,11 @@ Preview: [lobby](screenshots/mabar-lobby.png), [mobile](screenshots/mabar-mobile
 
 Daily solo juga lolos pengujian lima babak dan ekspor saat flag mabar aktif pada desktop/mobile.
 Batas canvas diuji ulang melalui permainan rantai lengkap pada kedua layout.
+
+
+### Panduan lobby
+
+Lobby menampilkan ringkasan mode, fakta permainan, status pemain, dan tombol Siap.
+Aturan lengkap berada di disclosure **Cara main**, tertutup saat masuk room atau
+berganti mode. Klik atau Enter/Space pada judul untuk membuka/menutup aturan;
+status siap dan ringkasan tetap terlihat saat aturan ditutup.

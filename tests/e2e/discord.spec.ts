@@ -54,6 +54,7 @@ test('Activity shows account and Daily loading states, then opens the game',asyn
   await page.route('**/api/discord/auth',async route=>{await authGate;return route.fulfill({json:{accessToken:'test-access',sessionToken:'1'.repeat(64),expiresAt:Date.now()+3600000,user:{id:userId,name:'Alice'},instanceId:'test-instance'}});});
   await page.route('**/api/daily',async route=>{await dailyGate;return route.fulfill({json:{...today,run:null}});});
   await page.route('**/api/random',route=>route.fulfill({json:{available:true,run:null}}));
+  await page.route('**/api/mabar/config',route=>route.fulfill({json:{enabled:true}}));
   await page.route('**/api/runs',route=>route.fulfill({json:{id:'test-run',mode:'daily',date:today.date,number:today.number,demo:true,completed:false,total:0,results:[],current:{index:0,kind:'bridge2',clues:['makanan','mall']}}}));
   await page.route('**/api/discord/instances/*/progress*',route=>route.fulfill({json:{date:today.date,number:today.number,participants}}));
   await page.route('**/api/runs/test-run/answers',async route=>{
@@ -76,6 +77,8 @@ test('Activity shows account and Daily loading states, then opens the game',asyn
     await expect(frame.locator('.activity-loading-steps [data-state="done"]')).toContainText('Akun Discord');
     releaseDaily();
     await expect(frame.getByRole('textbox',{name:'SATU KATA VERSIMU'})).toBeVisible();
+    await expect(frame.getByRole('button',{name:'Solo',exact:true})).toHaveAttribute('aria-pressed','true');
+    await expect(frame.getByRole('button',{name:'Mabar',exact:true})).toHaveAttribute('aria-pressed','false');
     await expect(frame.getByRole('region',{name:'Memuat Activity'})).toHaveCount(0);
     await expect(frame.getByRole('button',{name:'Pemain di Activity'})).toBeEnabled();
     await frame.getByRole('textbox',{name:'SATU KATA VERSIMU'}).fill('restoran');

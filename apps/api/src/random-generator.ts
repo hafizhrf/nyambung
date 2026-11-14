@@ -1,31 +1,38 @@
 import { bridgeSeparation } from './bridge-quality.js';
-import { profileFor,type PackedVectors } from './vector-index.js';
+import { profileFor,semanticSimilarity,type PackedVectors } from './vector-index.js';
 import { selectRetrievedRounds, type RetrievalContext } from './retrieval.js';
 import type { StageKind } from '@nyambung/shared';
 import type { PublishedStage, ScoreEntry } from './scoring.js';
 export interface ClueProfile { word:string; similarities:number[]; baseline:number; reference:number }
-export interface ReviewedBridge { answer:string; facets:string[][]; source?:string; sense?:string }
+export interface ReviewedBridge { answer:string; facets:string[][]; source?:string; sense?:string; variants?:string[] }
 export interface RandomGenerator {
+  scoringPolicy?:{version:'grounded-bridge-v1';lexicalWords:string[]};
   version:1|2|3|4; facetPolicy?:'distinct-roles-v1'; bridgePolicy?:'cross-context-v1'; packed?:PackedVectors; relations?:ReviewedBridge[]; words:string[]; answers:string[]; profiles:ClueProfile[]; excludedCombos:string[];
 }
 export interface GeneratedRound { kind:StageKind; clues:string[]; target?:string; features?:number[] }
 export interface GeneratedSelection { generator:1; rounds:GeneratedRound[]; closestIndex?:number; policy?:{version:'retrieval-ridge-v1';samples:number;weights:number[];explorations:number} }
-const lookupCache = new WeakMap<RandomGenerator, { indexes:Map<string,number>; allowed:Set<string>; answerIndexes:number[] }>();
+const lookupCache = new WeakMap<RandomGenerator, { indexes:Map<string,number>; allowed:Set<string>; answerIndexes:number[]; lexical:Set<string> }>();
 const connectionCache = new WeakMap<ClueProfile, Float64Array>();
 function lookup(data:RandomGenerator) {
   let cached=lookupCache.get(data);
   if (!cached) {
     const indexes=new Map(data.words.map((word,index)=>[word,index]));
-    cached={indexes,allowed:new Set(data.answers),answerIndexes:data.answers.map(word=>indexes.get(word)).filter((index):index is number=>index !== undefined)};
+    cached={indexes,lexical:new Set(data.scoringPolicy?.lexicalWords??[]),allowed:new Set(data.answers),answerIndexes:data.answers.map(word=>indexes.get(word)).filter((index):index is number=>index !== undefined)};
     lookupCache.set(data,cached);
   }
   return cached;
 }
-function strengths(profile:ClueProfile) {
-  let cached=connectionCache.get(profile);
+const calibratedConnectionCache = new WeakMap<ClueProfile, Float64Array>();
+function strengths(profile:ClueProfile, calibrated=false) {
+  const cache=calibrated?calibratedConnectionCache:connectionCache;
+  let cached=cache.get(profile);
   if (!cached) {
-    cached=Float64Array.from(profile.similarities.map(similarity=>Math.pow(Math.max(0,Math.min(1,(similarity-profile.baseline)/(profile.reference-profile.baseline))),.55)));
-    connectionCache.set(profile,cached);
+    // A small positive cosine is weak evidence, not half a connection. Keep
+    // the old exponent only for editions published before this policy.
+    const baseline=calibrated?Math.max(0,profile.baseline):profile.baseline;
+    const reference=calibrated?Math.max(.25,profile.reference):profile.reference;
+    cached=Float64Array.from(profile.similarities.map(similarity=>Math.pow(Math.max(0,Math.min(1,(similarity-baseline)/(reference-baseline))),calibrated?1:.55)));
+    cache.set(profile,cached);
   }
   return cached;
 }
@@ -45,7 +52,7 @@ export function evaluateRound(data:RandomGenerator, round:GeneratedRound, checkQ
   }
   const clues = new Set(round.clues);
   const rawScores = new Float64Array(data.words.length);
-  const connections = p.map(strengths);
+  const connections = p.map(profile=>strengths(profile));
   let top = -1, topValue = 0;
   for (let i=0;i<data.words.length;i++) {
     if (clues.has(data.words[i])) continue;
@@ -99,6 +106,14 @@ export function selectRounds(data:RandomGenerator, pick:(limit:number)=>number, 
 // A numerical nearest neighbour is not evidence that a bridge makes sense.
 // Only reviewed cross-facet associations can define the answer for new rounds.
 const relationCache=new WeakMap<RandomGenerator,Map<string,number[]>>();
+// Taxonomy alone does not establish an everyday cross-context association.
+const genericLexicalClues=new Set('individu orang makhluk entitas objek benda bagian unsur jenis kategori proses aktivitas perbuatan sesuatu perihal produk area sesama'.split(' '));
+export function supportsBridgeClues(data:RandomGenerator,relation:ReviewedBridge,clues:string[]):boolean {
+  if(!data.scoringPolicy||relation.source!=='wordnet-bahasa') return true;
+  if(clues.some(clue=>genericLexicalClues.has(clue))) return false;
+  const values=clues.map(clue=>semanticSimilarity(data,clue,relation.answer));
+  return values.length>0&&values.every(value=>Number.isFinite(value)&&value>=.25)&&values.reduce((a,b)=>a+b,0)/values.length>=.32;
+}
 export function reviewedAnswers(data:RandomGenerator,clues:string[]):string[] {
  let index=relationCache.get(data);if(!index) {
   index=new Map();(data.relations??[]).forEach((relation,i)=>{for(const clue of new Set(relation.facets.flat())) {const list=index!.get(clue)??[];list.push(i);index!.set(clue,list);}});relationCache.set(data,index);
@@ -106,7 +121,7 @@ export function reviewedAnswers(data:RandomGenerator,clues:string[]):string[] {
  const candidates=clues.map(clue=>index!.get(clue)??[]).sort((a,b)=>a.length-b.length)[0]??[];
  return [...new Set(candidates.filter(i=>{
   const relation=data.relations![i];
-  if(clues.includes(relation.answer)) return false;
+  if(clues.includes(relation.answer)||!supportsBridgeClues(data,relation,clues)) return false;
   const first=clues.map(clue=>relation.facets.findIndex(group=>group.includes(clue)));
   if(first.some(index=>index<0)) return false;
   if(new Set(first).size===clues.length) return true;
@@ -116,14 +131,17 @@ export function reviewedAnswers(data:RandomGenerator,clues:string[]):string[] {
   const match=(position:number,used:Set<number>):boolean=>position===clues.length || relation.facets.some((group,index)=>
     !used.has(index)&&group.includes(clues[position])&&match(position+1,new Set([...used,index])));
   return match(0,new Set());
- }).map(i=>data.relations![i].answer))];
+ }).flatMap(i=>[data.relations![i].answer,...(data.relations![i].variants??[])]))].filter(word=>!clues.includes(word));
 }
 function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):PublishedStage|null {
   if (!['bridge2','bridge3'].includes(round.kind) || round.clues.length!==(round.kind==='bridge3'?3:2) || new Set(round.clues).size!==round.clues.length) return null;
   const approved=new Set(reviewedAnswers(data,round.clues));
   const profiles=round.clues.map(word=>profileFor(data,word));
   if (!approved.size || profiles.some(profile=>!profile) || (data.version>=3 && round.target && !approved.has(round.target))) return null;
-  const p=profiles as ClueProfile[], connections=p.map(strengths);
+  const calibrated=data.scoringPolicy?.version==='grounded-bridge-v1';
+  const lexical=lookup(data).lexical;
+  const variants=new Set((data.relations??[]).flatMap(relation=>relation.variants??[]));
+  const p=profiles as ClueProfile[], connections=p.map(profile=>strengths(profile,calibrated));
   const harmonic=(values:number[])=>values.some(value=>value<=0)?0:values.length/values.reduce((sum,value)=>sum+1/value,0);
   const scores:Record<string,ScoreEntry>={};
   let best='', bestValue=-1;
@@ -132,20 +150,23 @@ function evaluateReviewedRound(data:RandomGenerator, round:GeneratedRound):Publi
     const values=connections.map(values=>values[i]);
     // Reviewed connections correct embedding blind spots. Other dictionary words
     // remain playable and receive their own continuous semantic score (0–949).
-    if (approved.has(word)) for(let j=0;j<values.length;j++) values[j]=Math.max(.94,values[j]);
+    if (approved.has(word)) for(let j=0;j<values.length;j++) values[j]=Math.max(calibrated?(variants.has(word)?.98:1):.94,values[j]);
     const value=harmonic(values);
     if (approved.has(word) && value>bestValue) {best=word;bestValue=value;}
-    scores[word]={score:Math.min(949,Math.round(949*value)),connections:values.map(value=>Math.round(value*1000)/1000),similarities:p.map(profile=>profile.similarities[i])};
+    // Dictionary membership alone is not semantic evidence. Surface forms
+    // without a lexical record remain playable, with lower confidence.
+    const confidence=calibrated&&!lexical.has(word)?.6:1;
+    scores[word]={score:Math.min(949,Math.round(949*value*confidence)),connections:values.map(value=>Math.round(value*1000)/1000),similarities:p.map(profile=>profile.similarities[i])};
   }
   if(data.version>=3 && round.target && scores[round.target]) {best=round.target;bestValue=harmonic(scores[best].connections);}
   if (!best) return null;
-  for (const word of approved) if (scores[word]) scores[word].score=Math.min(1000,Math.round(1000*harmonic(scores[word].connections)/bestValue));
+  for (const word of approved) if (scores[word]) scores[word].score=Math.min(calibrated&&variants.has(word)&&word!==best?980:1000,Math.round(1000*harmonic(scores[word].connections)/bestValue));
   scores[best].score=1000;
   const histogram=new Uint32Array(1001), ranks=new Uint32Array(1001);
   for (const entry of Object.values(scores)) histogram[entry.score]++;
   let above=0;for(let score=1000;score>=0;score--) {ranks[score]=above+1;above+=histogram[score];}
   for (const entry of Object.values(scores)) entry.rank=ranks[entry.score];
-  return {...round,best,explanation:'',overrides:{},scores,vocabularySize:Object.keys(scores).length};
+  return {...round,best,explanation:'',overrides:{},scores,vocabularySize:Object.keys(scores).length,...(calibrated?{referenceAnswers:[...approved]}:{})};
 }
 const reviewedCandidateCache=new WeakMap<RandomGenerator,Map<string,{round:GeneratedRound;answers:string[]}[]>>();
 function selectReviewedRounds(data:RandomGenerator,pick:(limit:number)=>number,excluded:Set<string>) {

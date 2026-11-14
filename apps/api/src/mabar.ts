@@ -1,6 +1,7 @@
 import {
   createHash,
   randomUUID,
+  randomInt,
   randomBytes,
   scryptSync,
   timingSafeEqual,
@@ -8,6 +9,8 @@ import {
 import { z } from "zod";
 import {
   commandSchema,
+  WORD_ALREADY_USED,
+  wordChainSuffixes,
   drawingSchema,
   roomSettings,
   normalizeWord,
@@ -18,6 +21,7 @@ import {
   type MatchView,
 } from "@nyambung/shared";
 import lexicon from "../../../content/lexicon.json";
+import {wordChainFamiliarWords} from '../../../content/word-chain.js';
 import type { Store } from "./db.js";
 import { createRoundSource, RoundError, type RoundRef } from "./mabar-rounds.js";
 export class MabarError extends Error {
@@ -65,12 +69,15 @@ interface Match {
   votes: Record<string, number>;
   galleryIndex: number;
   lastWord: string;
+  requiredPrefix?: string;
   used: string[];
   lastAttempts: Record<string, number>;
   /** Sambung Kata elimination: whose turn it is, the round and who is out. */
   turn?: string;
   round?: number;
   eliminated?: string[];
+  lives?: Record<string, number>;
+  lastFailure?: { playerId: string; reason: string; remaining: number; attempt?:string; prefix?:string; examples?:string[] };
 }
 interface Room {
   id: string;
@@ -112,7 +119,7 @@ const nameSchema = z
   .min(2)
   .max(24)
   .refine((s) => !/[\x00-\x1f\x7f]/.test(s));
-export function createMabar(store: Store, clock: () => number = Date.now) {
+export function createMabar(store: Store, clock: () => number = Date.now, pickPrefix:(limit:number)=>number = randomInt) {
   const sql = store.sqlite,
     dictionary = new Set(lexicon.filter((w) => /^[a-z]{2,32}$/.test(w))),
     tickets = new Map<
@@ -120,6 +127,35 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       { room: string; identity: MabarIdentity; until: number }
     >(),
     rates = new Map<string, { at: number; n: number }>();
+  // Prefix counts make availability checks independent of dictionary size per turn.
+  const familiarWords=wordChainFamiliarWords.filter(word=>dictionary.has(word));
+  const familiar=new Set(familiarWords);
+  const prefixCounts=new Map<string,number>();
+  for(const word of familiarWords)for(let length=1;length<=Math.min(4,word.length);length++) {
+    const prefix=word.slice(0,length);prefixCounts.set(prefix,(prefixCounts.get(prefix)??0)+1);
+  }
+  function assignWordPrefix(m:Match) {
+    const used=new Set(m.used),usedCounts=new Map<string,number>();
+    for(const word of used)if(familiar.has(word))for(let length=1;length<=Math.min(4,word.length);length++) {
+      const prefix=word.slice(0,length);usedCounts.set(prefix,(usedCounts.get(prefix)??0)+1);
+    }
+    const remaining=(prefix:string)=>(prefixCounts.get(prefix)??0)-(usedCounts.get(prefix)??0);
+    let available=wordChainSuffixes(m.lastWord).filter(prefix=>prefix.length<m.lastWord.length&&remaining(prefix)>=3);
+    if(!available.length) {
+      // An overly narrow ending gets a fresh seed with enough familiar continuations.
+      const seed=familiarWords.find(word=>!used.has(word)&&wordChainSuffixes(word).some(prefix=>prefix.length<word.length&&remaining(prefix)-(word.startsWith(prefix)?1:0)>=3));
+      if(!seed)throw new MabarError('Tidak ada kata lanjutan yang tersisa.',409);
+      m.lastWord=seed;m.used.push(seed);
+      for(let length=1;length<=Math.min(4,seed.length);length++) {
+        const prefix=seed.slice(0,length);usedCounts.set(prefix,(usedCounts.get(prefix)??0)+1);
+      }
+      available=wordChainSuffixes(seed).filter(prefix=>prefix.length<seed.length&&remaining(prefix)>=3);
+    }
+    // Equally likely for feasible 1–3 letter endings; four remains occasional.
+    const weights=[0,3,3,3,1];
+    const weighted=available.flatMap(prefix=>Array<string>(weights[prefix.length]).fill(prefix));
+    m.requiredPrefix=weighted[pickPrefix(weighted.length)];
+  }
   const roomCache = new Map<string, Room>();
   const rounds = createRoundSource(store);
   /** Round errors surface to players with the same status as room errors. */
@@ -473,8 +509,9 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       lastWord: "rumah",
       used: ["rumah"],
       lastAttempts: {},
-      ...(mode === "word" ? { turn: order[0], round: 1, eliminated: [] } : {}),
+      ...(mode === "word" ? { turn: order[0], round: 1, eliminated: [], lives: Object.fromEntries(order.map(id => [id, 2])) } : {}),
     };
+    if(mode==='word')assignWordPrefix(r.match!);
     r.notice = "";
   }
   function chainIndex(m: Match, id: string) {
@@ -485,6 +522,17 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
   }
   const survivors = (m: Match) =>
     m.order.filter((id) => !m.eliminated?.includes(id));
+  function loseLife(r: Room, reason: string, attempt?:string) {
+    const m = r.match!, playerId = m.turn!;
+    m.lives ??= Object.fromEntries(m.order.map(id => [id, 2]));
+    const remaining = Math.max(0, (m.lives[playerId] ?? 2) - 1);
+    m.lives[playerId] = remaining;
+    const prefix=m.requiredPrefix??m.lastWord.slice(-1),used=new Set(m.used);
+    const examples=familiarWords.filter(word=>word.startsWith(prefix)&&!used.has(word)).sort((a,b)=>a.length-b.length).slice(0,3);
+    m.lastFailure = { playerId, reason, remaining, prefix, examples, ...(attempt!==undefined?{attempt}:{}) };
+    if (!remaining && !m.eliminated!.includes(playerId)) m.eliminated!.push(playerId);
+    m.phase = 'reveal'; m.deadline = clock() + 5000;
+  }
   /** Passes the Sambung Kata turn to the next surviving player in order. */
   function nextTurn(r: Room) {
     const m = r.match!,
@@ -497,8 +545,10 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
       m.turn = id;
       break;
     }
+    assignWordPrefix(m);
     m.stage++;
     m.answers = [];
+    m.lastFailure = undefined;
     m.phase = "playing";
     m.started = clock();
     m.deadline = clock() + duration(r, m) * 1000;
@@ -574,10 +624,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
     }
     if (m.phase === "playing") {
       if (m.mode === "word") {
-        // Running out of time is elimination.
-        m.eliminated!.push(m.turn!);
-        m.phase = "reveal";
-        m.deadline = clock() + 3000;
+        loseLife(r, 'Waktu habis.');
         return;
       }
       completeStage(r);
@@ -634,6 +681,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
         total: m.total,
         deadline: m.deadline,
         prompt: m.mode === "word" ? m.lastWord : "",
+        ...(m.mode === "quick" ? {answered:m.answers.map(answer=>answer.playerId)} : {}),
         submitted:
           m.locked.includes(i.id) || m.answers.some((a) => a.playerId === i.id),
         ...(m.mode === "quick" && m.phase !== "countdown" && m.stages.length
@@ -644,8 +692,10 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
         ...(m.mode === "word"
           ? {
               turn: m.turn,
+              requiredPrefix:m.requiredPrefix??m.lastWord.slice(-1),
               round: m.round,
               eliminated: m.eliminated,
+              lives: m.lives,
               turnSeconds: duration(r, m),
               used: m.used.slice(-12),
             }
@@ -673,7 +723,7 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
             ? { explanation: m.explanation }
             : {}),
           ...(m.mode === "word" && m.phase === "reveal"
-            ? { eliminated: m.eliminated?.at(-1) }
+            ? { lostLife: m.lastFailure, ...(m.lastFailure?.remaining === 0 ? { eliminated: m.lastFailure.playerId } : {}) }
             : {}),
           answers: m.phase === "results" ? m.history.flat() : m.answers,
         };
@@ -829,27 +879,15 @@ export function createMabar(store: Store, clock: () => number = Date.now) {
               throw new MabarError("Kamu sudah gugur.", 403);
             if (m.turn !== i.id) throw new MabarError("Belum giliranmu.", 403);
             const word = clean(raw);
-            if (!/^[a-z]+$/.test(word) || !dictionary.has(word))
-              throw new MabarError("Kata belum ada di kamus.");
-            if (!word.startsWith(m.lastWord.slice(-1)))
-              throw new MabarError(
-                `Kata harus diawali huruf ${m.lastWord.slice(-1).toUpperCase()}.`,
-              );
-            if (m.used.includes(word))
-              throw new MabarError("Kata itu sudah dipakai di permainan ini.");
+            if(m.used.includes(word))throw new MabarError(WORD_ALREADY_USED,409);
+            const mistake = !/^[a-z]+$/.test(word) || !dictionary.has(word)
+              ? 'Kata belum ada di kamus.'
+              : !word.startsWith(m.requiredPrefix??m.lastWord.slice(-1))
+                ? `Kata harus diawali ${ (m.requiredPrefix??m.lastWord.slice(-1)).toUpperCase() } sesuai pilihan server.`
+                : '';
+            if (mistake) { loseLife(r, mistake, raw); break; }
             m.used.push(word);
             m.lastWord = word;
-            const tail = word.slice(-1);
-            if (
-              ![...dictionary].some(
-                (w) => w.startsWith(tail) && !m.used.includes(w),
-              )
-            ) {
-              m.lastWord = "rumah";
-              if (m.used.includes("rumah"))
-                m.lastWord = [...dictionary].find((w) => !m.used.includes(w))!;
-              m.used.push(m.lastWord);
-            }
             m.scores[i.id] = (m.scores[i.id] ?? 0) + 100;
             m.history.push([{ playerId: i.id, word, score: 100 }]);
             for (const v of r.members) v.score = m.scores[v.id] ?? 0;

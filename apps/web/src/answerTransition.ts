@@ -42,14 +42,14 @@ export function morphAnswerInput(field: HTMLElement, caption: string, perfect: b
   field.dataset.morphing = 'true';
   return new Promise(resolve => {
     gsap.set(field, { width, height, position:'relative', overflow:'hidden', marginInline:'auto', flexShrink:0 });
-    gsap.set(label, { opacity:0, y:4 });
+    gsap.set(label, { opacity:0 });
     gsap.timeline({ onComplete:resolve })
-      .to([input,submit], { opacity:0, duration:.12, ease:'power2.out' }, 0)
-      .to(meta, { height:0, marginTop:0, opacity:0, overflow:'hidden', duration:.24, ease:'power3.inOut' }, 0)
+      .to([input,submit], { opacity:0, duration:.12, ease:'steps(2)' }, 0)
+      .to(meta, { height:0, marginTop:0, opacity:0, overflow:'hidden', duration:.24, ease:'steps(8)' }, 0)
       .set([input,submit], { position:'absolute', pointerEvents:'none' }, .12)
       .to(field, { width:Math.min(width,target.width), height:target.height, padding:0, gap:0,
         borderRadius:0, backgroundColor:color, borderColor:color,
-        boxShadow:perfect ? `0 3px 0 ${perfectShadow}` : buttonShadow, duration:.42, ease:'power3.inOut' }, .04)
-      .to(label, { opacity:1, y:0, duration:.2, ease:'power2.out' }, .24);
+        boxShadow:perfect ? `0 3px 0 ${perfectShadow}` : buttonShadow, duration:.42, ease:'steps(8)' }, .04)
+      .to(label, { opacity:1, duration:.16, ease:'steps(2)' }, .24);
   });
 }

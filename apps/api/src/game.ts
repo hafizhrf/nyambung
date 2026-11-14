@@ -5,7 +5,7 @@ import { trainDifficulty, type Observation } from './adaptive.js';
 import { roundFeatures, type Exposure } from './retrieval.js';
 import { and, eq, asc, desc, isNull, lt } from 'drizzle-orm';
 import { randomUUID, randomInt } from 'node:crypto';
-import { normalizeWord, type RunView, type StageResult, type Stats, type DailyComparison, type ArchiveView } from '@nyambung/shared';
+import { normalizeWord, type RunView, type StageResult, type Stats, type DailyComparison, type ArchiveView, type TopAnswer, type StageTopAnswers } from '@nyambung/shared';
 import { answers, daily, players, runs, puzzleVersions, randomPool } from './schema.js';
 import type { Store } from './db.js';
 import { createHash } from 'node:crypto';
@@ -17,6 +17,7 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
   const db = store.orm;
   const snapshotCache = new Map<string, Snapshot>();
   const generatedCache = new Map<string, PublishedStage>();
+  const topAnswerCache = new WeakMap<PublishedStage, TopAnswer[]>();
   const roundKey = (versionId:string, round:GeneratedRound) => `${versionId}/${JSON.stringify(round)}`;
   function cacheRound(versionId:string, round:GeneratedRound, stage:PublishedStage) {
     if (generatedCache.size >= 8) generatedCache.delete(generatedCache.keys().next().value!);
@@ -44,7 +45,23 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
       }
       return stage;
     }
-    return snapshot.stages[Array.isArray(order) ? order[index] : index];
+    const descriptor=snapshot.stages[Array.isArray(order) ? order[index] : index];
+    if(snapshot.scoringRef) {
+      // Scheduled Daily content owns its clues and explanations. Its scoring
+      // index is an immutable edition, independent of the active random pool.
+      const source=snapshotFor(snapshot.scoringRef).generator;
+      if(source?.version!==4) throw new Error('Indeks skor Daily tidak tersedia.');
+      const round:GeneratedRound={kind:descriptor.kind,clues:descriptor.clues,target:descriptor.best};
+      const key=roundKey(run.versionId!,round);let stage=generatedCache.get(key);
+      if(!stage) {
+        stage=descriptor.kind==='closest'?evaluateClosest(source,descriptor):evaluateRound(source,round)??undefined;
+        if(!stage) throw new Error('Hubungan Daily terkurasi tidak valid.');
+        stage={...stage,explanation:descriptor.explanation};
+        cacheRound(run.versionId!,round,stage);
+      }
+      return stage;
+    }
+    return descriptor;
   }
   function snapshotFor(versionId: string): Snapshot {
     let snapshot = snapshotCache.get(versionId);
@@ -70,6 +87,30 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     const index = results.length;
     const stage = index < 5 ? stageFor(run,index) : null;
     return { mode: run.mode, id, date: run.date, number: puzzle?.number ?? 0, demo: version.demo, completed: index === 5, total: results.reduce((sum, r) => sum + r.score, 0), results, current: stage ? { index, kind: stage.kind, clues: stage.clues } : null };
+  }
+  function topAnswers(id: string, playerId: string, index: number): StageTopAnswers {
+    if (!Number.isInteger(index) || index < 0 || index > 4) throw new GameError('Babak tidak valid.');
+    const run = requireRun(id, playerId);
+    if (!db.select().from(answers).where(and(eq(answers.runId, id), eq(answers.stage, index))).get())
+      throw new GameError('Jawab atau lewati babak ini dulu.', 409);
+    const stage = stageFor(run, index);
+    let best = topAnswerCache.get(stage);
+    if (!best) {
+      const blocked = new Set(snapshotFor(run.versionId!).blocked);
+      best = [];
+      const compare = (a: TopAnswer, b: TopAnswer) => b.score - a.score || Number(b.word === stage.best) - Number(a.word === stage.best) || (a.word < b.word ? -1 : a.word > b.word ? 1 : 0);
+      const references=stage.referenceAnswers?new Set(stage.referenceAnswers):undefined;
+      // Keep only five candidates: avoid sorting or returning the full vocabulary.
+      for (const word in stage.scores) {
+        if ((references&&!references.has(word)) || !Object.hasOwn(stage.scores, word) || blocked.has(word) || stage.clues.includes(word) || !/^[a-z]+$/.test(word)) continue;
+        const candidate = { word, score: stage.scores[word].score };
+        if (best.length === 5 && compare(candidate, best[4]) >= 0) continue;
+        best.push(candidate); best.sort(compare);
+        if (best.length > 5) best.pop();
+      }
+      topAnswerCache.set(stage, best);
+    }
+    return { stage: index, answers: best,...(stage.referenceAnswers?{referenceOnly:true}:{}) };
   }
   function archive(playerId: string, before?: string): ArchiveView {
     const today = wibDate(clock());
@@ -156,7 +197,7 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     // Read actual clues rather than stage indices: indices change between editions.
     // Keeping the N-1 most recent distinct clues gives a full rotation of N clues.
     const available=new Set(candidates.map(item=>combinationKey(item.stage.clues)));
-    const history=store.sqlite.prepare("SELECT a.result FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id=? AND r.mode='random' AND a.stage=4 ORDER BY r.rowid DESC").iterate(playerId) as Iterable<{result:string}>;
+    const history=store.sqlite.prepare("SELECT a.result,r.version_id FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id=? AND r.mode='random' AND a.stage=4 ORDER BY r.rowid DESC").iterate(playerId) as Iterable<{result:string}>;
     const recent=new Set<string>(),recentConcepts=new Set<string>();
     const concepts=new Map(candidates.map(item=>[combinationKey(item.stage.clues),item.stage.concept??combinationKey(item.stage.clues)]));
     for(const row of history) {
@@ -187,12 +228,15 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
         let context:import('./retrieval.js').RetrievalContext|undefined;
         if(snapshot.generator.version>=3) {
           const generator=snapshot.generator;
-          const own=store.sqlite.prepare("SELECT a.result FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id=? AND r.mode='random' AND a.stage<4 ORDER BY r.rowid DESC,a.stage DESC LIMIT 1200").all(playerId) as {result:string}[];
-          const others=store.sqlite.prepare("SELECT a.result FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id<>? AND r.mode='random' AND a.stage<4 ORDER BY r.rowid DESC,a.stage DESC LIMIT 800").all(playerId) as {result:string}[];
+          const own=store.sqlite.prepare("SELECT a.result,r.version_id FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id=? AND r.mode='random' AND a.stage<4 ORDER BY r.rowid DESC,a.stage DESC LIMIT 1200").all(playerId) as {result:string;version_id:string}[];
+          const others=store.sqlite.prepare("SELECT a.result,r.version_id FROM answers a JOIN runs r ON r.id=a.run_id WHERE r.player_id<>? AND r.mode='random' AND a.stage<4 ORDER BY r.rowid DESC,a.stage DESC LIMIT 800").all(playerId) as {result:string;version_id:string}[];
           const exposures:Exposure[]=[],observations:Observation[]=[];
           for(const [rows,weight] of [[own,3],[others,1]] as const) for(const row of rows) {
             const result=JSON.parse(row.result) as StageResult;
             if(weight===3) exposures.push({best:result.best,clues:result.clues});
+            // Retain novelty history, but never learn the new score scale from
+            // outcomes scored by a previous edition.
+            if(generator.scoringPolicy&&row.version_id!==pool.versionId) continue;
             const features=roundFeatures(generator,{kind:result.kind,clues:result.clues},result.best);
             if(features) observations.push({features,outcome:result.skipped?0:result.score/1000,weight});
           }
@@ -240,5 +284,5 @@ export function game(store: Store, clock: () => Date = () => new Date()) {
     };
   }
   function createPlayer(id = randomUUID()) { db.insert(players).values({ id, createdAt: clock().toISOString() }).onConflictDoNothing().run(); return id; }
-  return { view, start, archive, startRandom, randomStatus, comparison, submit, stats, createPlayer };
+  return { view, start, archive, startRandom, randomStatus, comparison, submit, stats, createPlayer, topAnswers };
 }
